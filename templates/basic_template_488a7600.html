@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>{{project_name}} - 软件著作权申请材料</title>
+    <style>
+        body { font-family: "SimSun", serif; font-size: 12pt; line-height: 1.6; }
+        .title { text-align: center; font-size: 24pt; font-weight: bold; margin-bottom: 20pt; }
+        .project-name { text-align: center; font-size: 18pt; margin-bottom: 30pt; }
+        .file-section { margin-bottom: 40pt; page-break-before: always; }
+        .file-title { font-size: 16pt; font-weight: bold; margin-bottom: 15pt; }
+        .highlight { font-family: "Consolas", monospace; font-size: 9pt; }
+    </style>
+</head>
+<body>
+    <div class="title">软件著作权申请材料</div>
+    <div class="project-name">{{project_name}}</div>
+    
+    <div class="meta-info">
+        <p>项目类型：{{project_type}}</p>
+        <p>生成时间：{{generated_time}}</p>
+        <p>文件总数：{{file_count}}</p>
+    </div>
+    
+    <div class="content">
+        {% for file in files %}
+        <div class="file-section">
+            <div class="file-title">{{loop.index}}. {{file.filename}}</div>
+            <div class="file-content">{{file.highlighted_content|safe}}</div>
+        </div>
+        {% endfor %}
+    </div>
+</body>
+</html>
