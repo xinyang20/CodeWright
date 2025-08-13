@@ -1,6 +1,6 @@
 {
   "name": "codewright-frontend",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "CodeWright 前端项目",
   "type": "module",
   "scripts": {

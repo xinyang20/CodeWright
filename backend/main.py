@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="CodeWright API",
     description="代码版权工匠 - 软件著作权申请材料准备平台",
-    version="0.0.1",
+    version="0.0.2",
     lifespan=lifespan
 )
 
@@ -63,12 +63,12 @@ app.include_router(settings.router, prefix="/api/v1/settings", tags=["设置"])
 @app.get("/")
 async def root():
     """根路径"""
-    return {"message": "CodeWright API v0.0.1"}
+    return {"message": "CodeWright API v0.0.2"}
 
 @app.get("/health")
 async def health_check():
     """健康检查"""
-    return {"status": "healthy", "version": "0.0.1"}
+    return {"status": "healthy", "version": "0.0.2"}
 
 if __name__ == "__main__":
     import uvicorn
