@@ -75,21 +75,64 @@ export const projectApi = {
   updateProject: (id: number, data: any): Promise<ApiResponse> => 
     api.put(`/projects/${id}`, data),
   
-  deleteProject: (id: number): Promise<ApiResponse> => 
-    api.delete(`/projects/${id}`)
+  deleteProject: (id: number): Promise<ApiResponse> =>
+    api.delete(`/projects/${id}`),
+
+  // 导出项目为PDF
+  exportProjectPdf: (id: number, options: any = {}): Promise<any> =>
+    api.post(`/projects/${id}/export/pdf`, options, { responseType: 'blob' })
 }
 
 // 文件相关API
 export const fileApi = {
-  uploadFile: (projectId: number, file: File): Promise<ApiResponse> => {
+  // 上传文件
+  uploadFile: (file: File): Promise<ApiResponse> => {
     const formData = new FormData()
     formData.append('file', file)
-    return api.post(`/projects/${projectId}/upload`, formData, {
+    return api.post('/files/upload', formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
       }
     })
-  }
+  },
+
+  // 获取用户文件列表
+  getUserFiles: (): Promise<ApiResponse> =>
+    api.get('/files'),
+
+  // 删除文件
+  deleteFile: (fileId: number): Promise<ApiResponse> =>
+    api.delete(`/files/${fileId}`),
+
+  // 预览文件
+  previewFile: (fileId: number, language?: string): Promise<ApiResponse> =>
+    api.get(`/files/${fileId}/preview`, {
+      params: language ? { language } : {}
+    }),
+
+  // 将文件添加到项目
+  addFileToProject: (projectId: number, fileId: number): Promise<ApiResponse> =>
+    api.post(`/projects/${projectId}/files/${fileId}`),
+
+  // 获取项目文件列表
+  getProjectFiles: (projectId: number): Promise<ApiResponse> =>
+    api.get(`/projects/${projectId}/files`),
+
+  // 从项目中移除文件
+  removeFileFromProject: (projectId: number, fileId: number): Promise<ApiResponse> =>
+    api.delete(`/projects/${projectId}/files/${fileId}`),
+
+  // 更新项目文件信息
+  updateProjectFile: (projectId: number, fileId: number, data: any): Promise<ApiResponse> =>
+    api.put(`/projects/${projectId}/files/${fileId}`, data),
+
+  // 重新排序项目文件
+  reorderProjectFiles: (projectId: number, fileOrders: any[]): Promise<ApiResponse> =>
+    api.put(`/projects/${projectId}/files/reorder`, fileOrders),
+
+  // 获取代码高亮CSS
+  getHighlightCss: (): Promise<ApiResponse> =>
+    api.get('/files/highlight/css')
 }
 
 // 导出相关API

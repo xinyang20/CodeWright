@@ -16,11 +16,20 @@ class ProjectService:
     
     async def create_project(self, project_data: ProjectCreate, owner_id: int) -> Project:
         """创建项目"""
+        import json
+
+        # 准备配置数据
+        config = {}
+        if project_data.code_options:
+            config['code_options'] = project_data.code_options.dict()
+        if project_data.manual_options:
+            config['manual_options'] = project_data.manual_options.dict()
+
         new_project = Project(
             project_name=project_data.project_name,
             project_type=project_data.project_type,
             owner_id=owner_id,
-            config_json="{}"
+            config_json=json.dumps(config, ensure_ascii=False)
         )
         
         self.db.add(new_project)
@@ -182,3 +191,102 @@ class ProjectService:
             }
             for item in project_items
         ]
+
+    async def remove_file_from_project(
+        self,
+        project_id: int,
+        file_id: int,
+        user_id: int
+    ) -> bool:
+        """从项目中移除文件"""
+        # 检查项目是否存在且属于用户
+        project = await self.get_project_by_id(project_id, user_id)
+        if not project:
+            return False
+
+        # 查找项目文件关联
+        project_item = self.db.query(ProjectItem).filter(
+            ProjectItem.project_id == project_id,
+            ProjectItem.file_id == file_id
+        ).first()
+
+        if not project_item:
+            return False
+
+        # 删除项目文件关联
+        self.db.delete(project_item)
+        self.db.commit()
+
+        return True
+
+    async def update_project_file(
+        self,
+        project_id: int,
+        file_id: int,
+        user_id: int,
+        update_data: dict
+    ) -> bool:
+        """更新项目文件信息"""
+        # 检查项目是否存在且属于用户
+        project = await self.get_project_by_id(project_id, user_id)
+        if not project:
+            return False
+
+        # 查找项目文件关联
+        project_item = self.db.query(ProjectItem).filter(
+            ProjectItem.project_id == project_id,
+            ProjectItem.file_id == file_id
+        ).first()
+
+        if not project_item:
+            return False
+
+        # 更新文件信息
+        if 'display_name' in update_data:
+            project_item.display_name = update_data['display_name']
+
+        if 'language_override' in update_data:
+            project_item.language_override = update_data['language_override']
+
+        if 'include_in_export' in update_data:
+            project_item.include_in_export = update_data['include_in_export']
+
+        self.db.commit()
+        return True
+
+    async def reorder_project_files(
+        self,
+        project_id: int,
+        file_orders: list,
+        user_id: int
+    ) -> bool:
+        """重新排序项目文件"""
+        # 检查项目是否存在且属于用户
+        project = await self.get_project_by_id(project_id, user_id)
+        if not project:
+            return False
+
+        try:
+            # 批量更新文件顺序
+            for order_data in file_orders:
+                file_id = order_data.get('file_id')
+                order_index = order_data.get('order_index')
+
+                if file_id is None or order_index is None:
+                    continue
+
+                # 查找项目文件关联
+                project_item = self.db.query(ProjectItem).filter(
+                    ProjectItem.project_id == project_id,
+                    ProjectItem.file_id == file_id
+                ).first()
+
+                if project_item:
+                    project_item.order_index = order_index
+
+            self.db.commit()
+            return True
+
+        except Exception as e:
+            self.db.rollback()
+            return False
