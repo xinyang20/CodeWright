@@ -79,7 +79,7 @@ CodeWright（代码版权工匠）是一个面向中国大陆用户、仅提供�
 
 #### **4. 技术选型**
 
-  * **前端**：`Vue 3` + `TypeScript`（Composition API）, 构建使用 `Vite`，状态管理 `Pinia`，路由 `Vue Router`，UI 组件库采用 `Element Plus`。预览链路：`markdown-it`（解析）+ `DOMPurify`（清洗）+ `highlight.js`（仅前端预览高亮）。
+  * **前端**：`Vue 3` + `TypeScript`（Composition API）, 构建使用 `Vite`，状态管理 `Pinia`，路由 `Vue Router`，UI 组件库采用 `Element Plus`（注意：Element UI 不兼容 Vue 3，必须使用 Element Plus）。预览链路：`markdown-it`（解析）+ `DOMPurify`（清洗）+ `highlight.js`（仅前端预览高亮）。
   * **后端**：`FastAPI`（Python 3.10+ 推荐）+ `Pydantic` v2；密码哈希 `bcrypt`/`Argon2`；鉴权 `JWT`。导出采用异步队列（`Redis` + `RQ`/`Celery`），任务可查询进度与结果。
   * **数据库**：`SQLite`（`SQLAlchemy` ORM）。
   * **PDF 生成**：
@@ -355,3 +355,24 @@ CodeWright（代码版权工匠）是一个面向中国大陆用户、仅提供�
 - 代码构建导出：顺序正确；连续行号选项生效；中文字体渲染正确；2000 行在 10s 内；下载文件可复核。
 - 手册构建导出：目录层级正确；章节图文匹配；Markdown 标题与段落渲染正确；样式与全局设置一致。
 - 管理：首个注册用户自动为管理员且不可删除；模板发布后不可直接覆盖（需新版本）。
+
+#### **16. 技术问题解决记录**
+
+**Element Plus 导入问题修复（2025-08-13）**
+- **问题**：页面报错 `Failed to resolve import "element-plus/es"`，导致除首页和登录页外的所有页面无法加载
+- **原因**：`unplugin-vue-components` 的 `ElementPlusResolver` 自动导入配置有问题
+- **解决方案**：
+  1. 在 `main.ts` 中手动全量导入 Element Plus：`import ElementPlus from 'element-plus'` 和 `app.use(ElementPlus)`
+  2. 移除 Vite 配置中的 `ElementPlusResolver` 自动导入配置
+  3. 保留 CSS 导入：`import 'element-plus/dist/index.css'`
+- **注意**：Element UI 不兼容 Vue 3，必须使用 Element Plus
+
+**登录跳转问题修复（2025-08-13）**
+- **问题**：登录成功后不自动跳转到 dashboard 页面
+- **原因**：
+  1. `auth.ts` 中缺少 `readonly` 导入，导致状态管理异常
+  2. `isAuthenticated` 计算属性同时检查 `token` 和 `user`，但 `getCurrentUser()` 是异步的
+- **解决方案**：
+  1. 添加 `readonly` 导入：`import { ref, computed, readonly } from 'vue'`
+  2. 修改 `isAuthenticated` 逻辑为仅检查 `token`：`computed(() => !!token.value)`
+- **验证**：登录后能正确跳转到 dashboard，所有需要认证的页面都能正常访问

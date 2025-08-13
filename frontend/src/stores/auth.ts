@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, readonly } from 'vue'
 import type { User, LoginRequest, RegisterRequest, LoginResponse } from '@/types'
 import { authApi } from '@/utils/api'
 
@@ -10,7 +10,7 @@ export const useAuthStore = defineStore('auth', () => {
   const loading = ref(false)
 
   // 计算属性
-  const isAuthenticated = computed(() => !!token.value && !!user.value)
+  const isAuthenticated = computed(() => !!token.value)
   const isAdmin = computed(() => user.value?.role === 'admin')
 
   // 动作
