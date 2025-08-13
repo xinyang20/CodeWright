@@ -46,6 +46,16 @@ export interface Project {
 export interface ProjectCreateRequest {
   project_name: string
   project_type: 'code' | 'manual'
+  code_options?: {
+    formatting: string[]
+    layout: string
+    font_size: string
+    export_options: string[]
+  }
+  manual_options?: {
+    template: string
+    default_sections: string[]
+  }
 }
 
 export interface ProjectListResponse {
@@ -65,6 +75,27 @@ export interface UploadedFile {
   file_type: string
   uploader_id: number
   created_at: string
+}
+
+export interface ProjectFile {
+  id: number
+  file_id: number
+  display_name: string
+  original_filename: string
+  file_size: number
+  file_type: string
+  language_override?: string
+  include_in_export: boolean
+  order_index: number
+  created_at: string
+}
+
+export interface FileListResponse {
+  files: UploadedFile[]
+}
+
+export interface ProjectFileListResponse {
+  files: ProjectFile[]
 }
 
 // 导出相关类型

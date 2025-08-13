@@ -1,13 +1,672 @@
 <template>
-  <div class="project-detail">
-    <h1>项目详情</h1>
-    <!-- TODO: 实现项目详情功能 -->
-    <p>项目详情功能开发中...</p>
+  <div class="project-detail" v-loading="loading">
+    <!-- 页面头部 -->
+    <div class="header">
+      <div class="header-left">
+        <el-button type="text" @click="$router.back()" class="back-btn">
+          <el-icon><ArrowLeft /></el-icon>
+          返回
+        </el-button>
+        <div class="project-info" v-if="project">
+          <h1>{{ project.project_name }}</h1>
+          <el-tag :type="project.project_type === 'code' ? 'primary' : 'success'" size="small">
+            {{ project.project_type === 'code' ? '代码文件' : '操作文档' }}
+          </el-tag>
+        </div>
+      </div>
+      <div class="header-actions" v-if="project">
+        <el-button @click="showEditDialog = true">
+          <el-icon><Edit /></el-icon>
+          编辑项目
+        </el-button>
+        <el-button type="primary" @click="handlePreview">
+          <el-icon><View /></el-icon>
+          预览
+        </el-button>
+        <el-button type="success" @click="handleExport">
+          <el-icon><Download /></el-icon>
+          导出 PDF
+        </el-button>
+      </div>
+    </div>
+
+    <!-- 项目内容区域 -->
+    <div class="content" v-if="project">
+      <el-row :gutter="24">
+        <!-- 左侧主要内容 -->
+        <el-col :span="16">
+          <div class="main-content">
+            <!-- 代码文件项目内容 -->
+            <div v-if="project.project_type === 'code'" class="code-project">
+              <el-card class="content-card">
+                <template #header>
+                  <div class="card-header">
+                    <span>代码文件</span>
+                    <el-button type="primary" size="small" @click="showUploadDialog = true">
+                      <el-icon><Plus /></el-icon>
+                      上传文件
+                    </el-button>
+                  </div>
+                </template>
+
+                <SortableFileList
+                  :files="files"
+                  @upload="showUploadDialog = true"
+                  @preview="previewFile"
+                  @setLanguage="setFileLanguage"
+                  @rename="editFileName"
+                  @remove="removeFile"
+                  @reorder="handleFileReorder"
+                />
+              </el-card>
+            </div>
+
+            <!-- 操作文档项目内容 -->
+            <div v-else class="manual-project">
+              <el-card class="content-card">
+                <template #header>
+                  <div class="card-header">
+                    <span>文档章节</span>
+                    <el-button type="primary" size="small" @click="addSection">
+                      <el-icon><Plus /></el-icon>
+                      添加章节
+                    </el-button>
+                  </div>
+                </template>
+
+                <div class="section-list">
+                  <div class="empty-sections">
+                    <el-empty description="暂无章节">
+                      <el-button type="primary" @click="addSection">
+                        添加第一个章节
+                      </el-button>
+                    </el-empty>
+                  </div>
+                  <!-- 章节列表将在后续任务中实现 -->
+                </div>
+              </el-card>
+            </div>
+          </div>
+        </el-col>
+
+        <!-- 右侧信息面板 -->
+        <el-col :span="8">
+          <div class="side-panel">
+            <!-- 项目信息 -->
+            <el-card class="info-card">
+              <template #header>
+                <span>项目信息</span>
+              </template>
+
+              <div class="info-item">
+                <label>项目名称：</label>
+                <span>{{ project.project_name }}</span>
+              </div>
+              <div class="info-item">
+                <label>项目类型：</label>
+                <span>{{ project.project_type === 'code' ? '代码文件' : '操作文档' }}</span>
+              </div>
+              <div class="info-item">
+                <label>创建时间：</label>
+                <span>{{ formatDate(project.created_at) }}</span>
+              </div>
+              <div class="info-item">
+                <label>更新时间：</label>
+                <span>{{ formatDate(project.updated_at) }}</span>
+              </div>
+            </el-card>
+
+            <!-- 项目配置 -->
+            <el-card class="config-card">
+              <template #header>
+                <span>项目配置</span>
+              </template>
+
+              <div class="config-content">
+                <!-- 配置选项将在后续任务中实现 -->
+                <p>配置选项开发中...</p>
+              </div>
+            </el-card>
+
+            <!-- 导出历史 -->
+            <el-card class="history-card">
+              <template #header>
+                <span>导出历史</span>
+              </template>
+
+              <div class="history-content">
+                <!-- 导出历史将在后续任务中实现 -->
+                <p>导出历史开发中...</p>
+              </div>
+            </el-card>
+          </div>
+        </el-col>
+      </el-row>
+    </div>
+
+    <!-- 编辑项目对话框 -->
+    <el-dialog
+      v-model="showEditDialog"
+      title="编辑项目"
+      width="500px"
+      :before-close="handleEditDialogClose"
+    >
+      <el-form
+        ref="editFormRef"
+        :model="editForm"
+        :rules="editRules"
+        label-width="80px"
+      >
+        <el-form-item label="项目名称" prop="project_name">
+          <el-input
+            v-model="editForm.project_name"
+            placeholder="请输入项目名称"
+            maxlength="100"
+            show-word-limit
+          />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="showEditDialog = false">取消</el-button>
+          <el-button type="primary" @click="handleEditSubmit" :loading="editLoading">
+            保存
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 文件上传对话框 -->
+    <el-dialog
+      v-model="showUploadDialog"
+      title="上传文件"
+      width="700px"
+      :before-close="handleUploadDialogClose"
+    >
+      <FileUpload
+        :project-id="project?.id"
+        :auto-add-to-project="true"
+        @success="handleUploadSuccess"
+        @error="handleUploadError"
+      />
+    </el-dialog>
+
+    <!-- 文件重命名对话框 -->
+    <FileRenameDialog
+      v-model="showRenameDialog"
+      :file="currentFile"
+      @success="handleRenameSuccess"
+    />
+
+    <!-- 语言选择对话框 -->
+    <LanguageSelector
+      v-model="showLanguageDialog"
+      :file="currentFile"
+      @success="handleLanguageSuccess"
+    />
+
+    <!-- 代码预览对话框 -->
+    <CodePreview
+      v-model="showPreviewDialog"
+      :file="currentFile"
+    />
+
+    <!-- HTML预览对话框 -->
+    <HtmlPreview
+      v-model="showHtmlPreviewDialog"
+      :project="project"
+    />
   </div>
 </template>
+
+<script setup lang="ts">
+import { ref, reactive, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import {
+  ArrowLeft,
+  Edit,
+  View,
+  Download,
+  Plus
+} from '@element-plus/icons-vue'
+import type { Project, ProjectFile } from '@/types'
+import { projectApi, fileApi } from '@/utils/api'
+import FileUpload from '@/components/FileUpload.vue'
+import FileRenameDialog from '@/components/FileRenameDialog.vue'
+import SortableFileList from '@/components/SortableFileList.vue'
+import LanguageSelector from '@/components/LanguageSelector.vue'
+import CodePreview from '@/components/CodePreview.vue'
+import HtmlPreview from '@/components/HtmlPreview.vue'
+
+const route = useRoute()
+const router = useRouter()
+
+// 响应式数据
+const loading = ref(false)
+const project = ref<Project | null>(null)
+const files = ref<ProjectFile[]>([])
+const showEditDialog = ref(false)
+const showUploadDialog = ref(false)
+const showRenameDialog = ref(false)
+const showLanguageDialog = ref(false)
+const showPreviewDialog = ref(false)
+const showHtmlPreviewDialog = ref(false)
+const editLoading = ref(false)
+const currentFile = ref<ProjectFile | null>(null)
+
+// 编辑表单
+const editFormRef = ref<FormInstance>()
+const editForm = reactive({
+  project_name: ''
+})
+
+const editRules: FormRules = {
+  project_name: [
+    { required: true, message: '请输入项目名称', trigger: 'blur' },
+    { min: 1, max: 100, message: '项目名称长度在 1 到 100 个字符', trigger: 'blur' }
+  ]
+}
+
+// 获取项目详情
+const fetchProject = async () => {
+  try {
+    loading.value = true
+    const projectId = parseInt(route.params.id as string)
+
+    const response = await projectApi.getProject(projectId)
+    if (response.code === 0) {
+      project.value = response.data
+      editForm.project_name = response.data.project_name
+
+      // 获取项目文件列表
+      await fetchProjectFiles()
+    } else {
+      ElMessage.error(response.message || '获取项目详情失败')
+      router.push('/projects')
+    }
+  } catch (error) {
+    console.error('获取项目详情失败:', error)
+    ElMessage.error('获取项目详情失败')
+    router.push('/projects')
+  } finally {
+    loading.value = false
+  }
+}
+
+// 获取项目文件列表
+const fetchProjectFiles = async () => {
+  if (!project.value) return
+
+  try {
+    const response = await fileApi.getProjectFiles(project.value.id)
+    if (response.code === 0) {
+      files.value = response.data.files
+    } else {
+      console.error('获取项目文件失败:', response.message)
+    }
+  } catch (error) {
+    console.error('获取项目文件失败:', error)
+  }
+}
+
+// 处理编辑提交
+const handleEditSubmit = async () => {
+  if (!editFormRef.value || !project.value) return
+
+  try {
+    const valid = await editFormRef.value.validate()
+    if (!valid) return
+
+    editLoading.value = true
+    const response = await projectApi.updateProject(project.value.id, {
+      project_name: editForm.project_name
+    })
+
+    if (response.code === 0) {
+      ElMessage.success('项目更新成功')
+      project.value.project_name = editForm.project_name
+      showEditDialog.value = false
+    } else {
+      ElMessage.error(response.message || '更新项目失败')
+    }
+  } catch (error) {
+    console.error('更新项目失败:', error)
+    ElMessage.error('更新项目失败')
+  } finally {
+    editLoading.value = false
+  }
+}
+
+// 处理编辑对话框关闭
+const handleEditDialogClose = () => {
+  if (project.value) {
+    editForm.project_name = project.value.project_name
+  }
+  showEditDialog.value = false
+}
+
+// 处理预览
+const handlePreview = () => {
+  if (project.value?.project_type === 'code') {
+    showHtmlPreviewDialog.value = true
+  } else {
+    ElMessage.info('操作文档预览功能开发中...')
+  }
+}
+
+// 处理导出
+const handleExport = async () => {
+  if (!project.value) return
+
+  try {
+    ElMessage.info('正在生成PDF，请稍候...')
+
+    // 获取项目配置中的导出选项
+    let exportOptions = {}
+    try {
+      const config = JSON.parse(project.value.config_json || '{}')
+      exportOptions = config.code_options?.export_options || {}
+    } catch (e) {
+      // 使用默认选项
+      exportOptions = {
+        include_toc: true,
+        include_summary: true,
+        watermark: false
+      }
+    }
+
+    const response = await projectApi.exportProjectPdf(project.value.id, exportOptions)
+
+    // 创建下载链接
+    const blob = new Blob([response], { type: 'application/pdf' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${project.value.project_name}.pdf`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+
+    ElMessage.success('PDF导出成功')
+  } catch (error) {
+    console.error('导出PDF失败:', error)
+    ElMessage.error('导出PDF失败')
+  }
+}
+
+// 添加章节
+const addSection = () => {
+  ElMessage.info('添加章节功能开发中...')
+}
+
+// 处理文件上传成功
+const handleUploadSuccess = (uploadedFiles: any[]) => {
+  ElMessage.success(`成功上传 ${uploadedFiles.length} 个文件`)
+  // 刷新项目文件列表
+  fetchProjectFiles()
+  // 关闭上传对话框
+  showUploadDialog.value = false
+}
+
+// 处理文件上传错误
+const handleUploadError = (error: string) => {
+  ElMessage.error(error)
+}
+
+// 处理上传对话框关闭
+const handleUploadDialogClose = () => {
+  showUploadDialog.value = false
+}
+
+// 处理文件重排序
+const handleFileReorder = async (reorderedFiles: ProjectFile[]) => {
+  if (!project.value) return
+
+  try {
+    // 准备排序数据
+    const fileOrders = reorderedFiles.map(file => ({
+      file_id: file.file_id,
+      order_index: file.order_index
+    }))
+
+    const response = await fileApi.reorderProjectFiles(project.value.id, fileOrders)
+    if (response.code === 0) {
+      // 更新本地文件列表
+      files.value = reorderedFiles
+      ElMessage.success('文件顺序更新成功')
+    } else {
+      ElMessage.error(response.message || '更新文件顺序失败')
+      // 重新获取文件列表以恢复原始顺序
+      fetchProjectFiles()
+    }
+  } catch (error) {
+    console.error('更新文件顺序失败:', error)
+    ElMessage.error('更新文件顺序失败')
+    // 重新获取文件列表以恢复原始顺序
+    fetchProjectFiles()
+  }
+}
+
+// 格式化日期
+const formatDate = (dateString: string) => {
+  const date = new Date(dateString)
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+
+
+// 预览文件
+const previewFile = (file: ProjectFile) => {
+  currentFile.value = file
+  showPreviewDialog.value = true
+}
+
+// 设置文件语言
+const setFileLanguage = (file: ProjectFile) => {
+  currentFile.value = file
+  showLanguageDialog.value = true
+}
+
+// 处理语言设置成功
+const handleLanguageSuccess = async (file: ProjectFile, language: string) => {
+  if (!project.value) return
+
+  try {
+    const response = await fileApi.updateProjectFile(
+      project.value.id,
+      file.file_id,
+      { language_override: language }
+    )
+
+    if (response.code === 0) {
+      ElMessage.success('语言类型设置成功')
+      // 更新本地文件列表
+      const fileIndex = files.value.findIndex(f => f.id === file.id)
+      if (fileIndex !== -1) {
+        files.value[fileIndex].language_override = language
+      }
+      showLanguageDialog.value = false
+    } else {
+      ElMessage.error(response.message || '设置语言类型失败')
+    }
+  } catch (error) {
+    console.error('设置语言类型失败:', error)
+    ElMessage.error('设置语言类型失败')
+  }
+}
+
+// 编辑文件名
+const editFileName = (file: ProjectFile) => {
+  currentFile.value = file
+  showRenameDialog.value = true
+}
+
+// 处理文件重命名成功
+const handleRenameSuccess = async (file: ProjectFile, newDisplayName: string) => {
+  if (!project.value) return
+
+  try {
+    const response = await fileApi.updateProjectFile(
+      project.value.id,
+      file.file_id,
+      { display_name: newDisplayName }
+    )
+
+    if (response.code === 0) {
+      ElMessage.success('文件重命名成功')
+      // 更新本地文件列表
+      const fileIndex = files.value.findIndex(f => f.id === file.id)
+      if (fileIndex !== -1) {
+        files.value[fileIndex].display_name = newDisplayName
+      }
+      showRenameDialog.value = false
+    } else {
+      ElMessage.error(response.message || '重命名失败')
+    }
+  } catch (error) {
+    console.error('重命名文件失败:', error)
+    ElMessage.error('重命名文件失败')
+  }
+}
+
+// 移除文件
+const removeFile = async (file: ProjectFile) => {
+  if (!project.value) return
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要从项目中移除文件 "${file.display_name || file.original_filename}" 吗？`,
+      '确认移除',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+
+    const response = await fileApi.removeFileFromProject(project.value.id, file.file_id)
+    if (response.code === 0) {
+      ElMessage.success('文件移除成功')
+      // 从本地文件列表中移除
+      files.value = files.value.filter(f => f.id !== file.id)
+    } else {
+      ElMessage.error(response.message || '移除失败')
+    }
+
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('移除文件失败:', error)
+      ElMessage.error('移除文件失败')
+    }
+  }
+}
+
+// 组件挂载时获取数据
+onMounted(() => {
+  fetchProject()
+})
+</script>
 
 <style scoped>
 .project-detail {
   padding: 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.header-left {
+  display: flex;
+  align-items: flex-start;
+}
+
+.back-btn {
+  margin-right: 16px;
+  padding: 8px;
+  margin-top: 8px;
+}
+
+.project-info h1 {
+  margin: 0 0 8px 0;
+  color: #111;
+  font-size: 28px;
+  font-weight: 600;
+}
+
+.header-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.content-card,
+.info-card,
+.config-card,
+.history-card {
+  margin-bottom: 16px;
+  border-radius: 8px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+}
+
+.empty-files,
+.empty-sections {
+  padding: 40px 0;
+  text-align: center;
+}
+
+.info-item {
+  display: flex;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+.info-item label {
+  width: 80px;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.info-item span {
+  color: #111;
+  flex: 1;
+}
+
+.config-content,
+.history-content {
+  padding: 20px 0;
+  text-align: center;
+  color: #666;
+}
+
+.dialog-footer {
+  text-align: right;
+}
+
+.upload-content {
+  padding: 20px 0;
+  text-align: center;
+  color: #666;
 }
 </style>
