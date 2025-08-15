@@ -214,9 +214,9 @@ defineExpose({
 
 <style scoped>
 .code-preview-dialog :deep(.el-dialog) {
-  margin-top: 5vh;
-  margin-bottom: 5vh;
-  height: 90vh;
+  margin-top: 2vh;
+  margin-bottom: 2vh;
+  height: 96vh;
   display: flex;
   flex-direction: column;
 }

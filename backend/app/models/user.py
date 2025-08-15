@@ -20,6 +20,7 @@ class User(Base):
     
     # 关系
     projects = relationship("Project", back_populates="owner", cascade="all, delete-orphan")
+    export_histories = relationship("ExportHistory", back_populates="user", cascade="all, delete-orphan")
     uploaded_files = relationship("UploadedFile", back_populates="uploader", cascade="all, delete-orphan")
     
     def __repr__(self):

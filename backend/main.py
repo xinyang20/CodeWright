@@ -9,7 +9,12 @@ import os
 from dotenv import load_dotenv
 
 from app.database import engine, Base
-from app.routers import auth, users, projects, files, exports, admin, settings
+from app.routers import auth, users, projects, files, exports, admin, settings, manual
+from app.routers import export_history as export_history_router
+
+# 导入所有模型以确保表被创建
+from app.models import user, project, file, manual_section, highlight_mapping, project_settings
+from app.models import export_history as export_history_model
 
 # 加载环境变量
 load_dotenv()
@@ -19,14 +24,25 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时创建数据库表
     Base.metadata.create_all(bind=engine)
-    
+
     # 创建必要的目录
     os.makedirs("../upload", exist_ok=True)
     os.makedirs("../templates", exist_ok=True)
     os.makedirs("../exports", exist_ok=True)
-    
+
+    # 初始化数据库数据
+    from app.services.init_service import InitService
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        init_service = InitService(db)
+        init_service.init_all()
+    finally:
+        db.close()
+
     yield
-    
+
     # 关闭时的清理工作
     pass
 
@@ -59,6 +75,8 @@ app.include_router(files.router, prefix="/api/v1/files", tags=["文件"])
 app.include_router(exports.router, prefix="/api/v1/exports", tags=["导出"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["管理"])
 app.include_router(settings.router, prefix="/api/v1/settings", tags=["设置"])
+app.include_router(manual.router, prefix="/api/v1/manual", tags=["操作文档"])
+app.include_router(export_history_router.router, prefix="/api/v1", tags=["导出历史"])
 
 @app.get("/")
 async def root():

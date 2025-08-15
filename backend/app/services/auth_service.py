@@ -54,24 +54,20 @@ class AuthService:
         existing_user = self.db.query(User).filter(User.username == user_data.username).first()
         if existing_user:
             raise ValueError("用户名已存在")
-        
-        # 创建新用户
+
+        # 创建新用户（所有注册用户默认为普通用户）
         hashed_password = self.get_password_hash(user_data.password)
-        
-        # 检查是否是第一个用户（自动设为管理员）
-        user_count = self.db.query(User).count()
-        role = "admin" if user_count == 0 else "user"
-        
+
         new_user = User(
             username=user_data.username,
             password_hash=hashed_password,
-            role=role
+            role="user"
         )
-        
+
         self.db.add(new_user)
         self.db.commit()
         self.db.refresh(new_user)
-        
+
         return new_user
     
     async def authenticate_user(self, user_data: UserLogin) -> dict:

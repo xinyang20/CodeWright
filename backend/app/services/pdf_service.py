@@ -2,6 +2,7 @@
 PDF导出服务
 """
 import os
+import time
 import tempfile
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -10,7 +11,7 @@ import weasyprint
 from weasyprint import HTML, CSS
 
 from app.models.project import Project, ProjectItem
-from app.models.uploaded_file import UploadedFile
+from app.models.file import UploadedFile
 from app.services.highlight_service import HighlightService
 
 class PdfService:
@@ -193,38 +194,124 @@ class PdfService:
         options: Dict[str, Any] = None
     ) -> Optional[bytes]:
         """导出项目为PDF"""
+        start_time = time.time()
+        export_record = None
+
         try:
             # 获取项目信息
             project = self.db.query(Project).filter(
                 Project.id == project_id,
                 Project.owner_id == user_id
             ).first()
-            
+
             if not project:
                 return None
-            
-            # 获取项目文件
-            project_items = self.db.query(ProjectItem).join(UploadedFile).filter(
-                ProjectItem.project_id == project_id,
-                ProjectItem.include_in_export == True
-            ).order_by(ProjectItem.order_index).all()
-            
-            if not project_items:
+
+            # 创建导出记录
+            from app.services.export_history_service import ExportHistoryService
+            export_service = ExportHistoryService(self.db)
+            export_record = await export_service.create_export_record(
+                project_id=project_id,
+                user_id=user_id,
+                export_type="pdf",
+                file_name=f"{project.project_name}.pdf",
+                export_options=options
+            )
+
+            # 更新进度：开始处理
+            if export_record:
+                await export_service.update_export_progress(export_record.id, 10.0, "processing")
+
+            # 执行导出
+            pdf_bytes = None
+            if project.project_type == 'code':
+                pdf_bytes = await self._export_code_project_to_pdf(project, options)
+            elif project.project_type == 'manual':
+                pdf_bytes = await self._export_manual_project_to_pdf(project, options)
+
+            if pdf_bytes:
+                # 更新进度：导出完成
+                processing_time = time.time() - start_time
+                if export_record:
+                    await export_service.complete_export(
+                        export_record.id,
+                        file_size=len(pdf_bytes),
+                        processing_time=processing_time
+                    )
+                return pdf_bytes
+            else:
+                # 导出失败
+                if export_record:
+                    await export_service.complete_export(
+                        export_record.id,
+                        error_message="PDF生成失败"
+                    )
                 return None
-            
-            # 生成HTML内容
-            html_content = await self._generate_html_content(project, project_items, options)
-            
-            # 生成PDF
-            pdf_bytes = self._html_to_pdf(html_content, options)
-            
-            return pdf_bytes
-            
+
         except Exception as e:
-            print(f"PDF导出失败: {str(e)}")
+            error_msg = f"PDF导出失败: {str(e)}"
+            print(error_msg)
+
+            # 记录导出失败
+            if export_record:
+                processing_time = time.time() - start_time
+                export_service = ExportHistoryService(self.db)
+                await export_service.complete_export(
+                    export_record.id,
+                    processing_time=processing_time,
+                    error_message=error_msg
+                )
+
             return None
+
+    async def _export_code_project_to_pdf(
+        self,
+        project: Project,
+        options: Dict[str, Any] = None
+    ) -> Optional[bytes]:
+        """导出代码项目为PDF"""
+        # 获取项目文件
+        project_items = self.db.query(ProjectItem).join(UploadedFile).filter(
+            ProjectItem.project_id == project.id,
+            ProjectItem.include_in_export == True
+        ).order_by(ProjectItem.order_index).all()
+
+        if not project_items:
+            return None
+
+        # 生成HTML内容
+        html_content = await self._generate_code_html_content(project, project_items, options)
+
+        # 生成PDF
+        pdf_bytes = self._html_to_pdf(html_content, options)
+
+        return pdf_bytes
+
+    async def _export_manual_project_to_pdf(
+        self,
+        project: Project,
+        options: Dict[str, Any] = None
+    ) -> Optional[bytes]:
+        """导出操作文档项目为PDF"""
+        from app.models.manual_section import ManualSection
+
+        # 获取项目章节
+        sections = self.db.query(ManualSection).filter(
+            ManualSection.project_id == project.id
+        ).order_by(ManualSection.order_index).all()
+
+        if not sections:
+            return None
+
+        # 生成HTML内容
+        html_content = await self._generate_manual_html_content(project, sections, options)
+
+        # 生成PDF
+        pdf_bytes = self._html_to_pdf(html_content, options)
+
+        return pdf_bytes
     
-    async def _generate_html_content(
+    async def _generate_code_html_content(
         self,
         project: Project,
         project_items: List[ProjectItem],
@@ -330,7 +417,154 @@ class PdfService:
 </html>""")
         
         return ''.join(html_parts)
-    
+
+    async def _generate_manual_html_content(
+        self,
+        project: Project,
+        sections: List,
+        options: Dict[str, Any] = None
+    ) -> str:
+        """生成操作文档HTML内容"""
+        if not options:
+            options = {}
+
+        html_parts = []
+
+        # HTML头部
+        html_parts.append(f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>{project.project_name}</title>
+</head>
+<body>""")
+
+        # 文档头部
+        html_parts.append(f"""
+    <div class="document-header">
+        <h1 class="document-title">{project.project_name}</h1>
+        <div class="document-meta">生成时间：{datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}</div>
+        <div class="document-meta">项目类型：操作文档</div>
+        <div class="document-meta">章节数量：{len(sections)} 个</div>
+    </div>""")
+
+        # 目录（如果启用）
+        if options.get('include_toc', True):
+            html_parts.append("""
+    <div class="toc-section">
+        <h2 class="toc-title">目录</h2>
+        <ul class="toc-list">""")
+
+            for i, section in enumerate(sections):
+                html_parts.append(f"""
+            <li class="toc-item">
+                <a href="#section-{i}" class="toc-link">{section.title}</a>
+            </li>""")
+
+            html_parts.append("""
+        </ul>
+    </div>""")
+
+        # 章节内容
+        for i, section in enumerate(sections):
+            html_parts.append(f"""
+    <div class="section" id="section-{i}">
+        <h2 class="section-title">{section.title}</h2>
+        <div class="section-content">""")
+
+            # 如果有图片，先显示图片
+            if section.image_file_id:
+                from app.models.file import UploadedFile
+                image_file = self.db.query(UploadedFile).filter(
+                    UploadedFile.id == section.image_file_id
+                ).first()
+                if image_file:
+                    # 这里简化处理，实际应该处理图片路径
+                    html_parts.append(f"""
+            <div class="section-image">
+                <p><em>图片：{image_file.original_filename}</em></p>
+            </div>""")
+
+            # 渲染Markdown内容
+            if section.body_markdown:
+                # 简单的Markdown到HTML转换（实际应该使用markdown库）
+                markdown_html = self._simple_markdown_to_html(section.body_markdown)
+                html_parts.append(markdown_html)
+            else:
+                html_parts.append('<p><em>暂无内容</em></p>')
+
+            html_parts.append("""        </div>
+    </div>""")
+
+        # 统计信息（如果启用）
+        if options.get('include_summary', True):
+            html_parts.append(f"""
+    <div class="stats-section">
+        <h2 class="stats-title">统计信息</h2>
+        <table class="stats-table">
+            <tr><th>项目名称</th><td>{project.project_name}</td></tr>
+            <tr><th>章节数量</th><td>{len(sections)} 个</td></tr>
+            <tr><th>生成时间</th><td>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</td></tr>
+        </table>
+    </div>""")
+
+        # 水印（如果启用）
+        if options.get('watermark', False):
+            html_parts.append("""
+    <div class="watermark">
+        Generated by CodeWright
+    </div>""")
+
+        # HTML尾部
+        html_parts.append("""
+</body>
+</html>""")
+
+        return ''.join(html_parts)
+
+    def _simple_markdown_to_html(self, markdown_text: str) -> str:
+        """简单的Markdown到HTML转换"""
+        if not markdown_text:
+            return ""
+
+        html_lines = []
+        lines = markdown_text.split('\n')
+        in_code_block = False
+
+        for line in lines:
+            line = line.strip()
+
+            if line.startswith('```'):
+                if in_code_block:
+                    html_lines.append('</pre>')
+                    in_code_block = False
+                else:
+                    html_lines.append('<pre><code>')
+                    in_code_block = True
+                continue
+
+            if in_code_block:
+                html_lines.append(line)
+                continue
+
+            if line.startswith('### '):
+                html_lines.append(f'<h4>{line[4:]}</h4>')
+            elif line.startswith('## '):
+                html_lines.append(f'<h3>{line[3:]}</h3>')
+            elif line.startswith('# '):
+                html_lines.append(f'<h2>{line[2:]}</h2>')
+            elif line.startswith('- '):
+                html_lines.append(f'<li>{line[2:]}</li>')
+            elif line:
+                html_lines.append(f'<p>{line}</p>')
+            else:
+                html_lines.append('<br>')
+
+        if in_code_block:
+            html_lines.append('</code></pre>')
+
+        return '\n'.join(html_lines)
+
     def _html_to_pdf(self, html_content: str, options: Dict[str, Any] = None) -> bytes:
         """将HTML转换为PDF"""
         if not options:

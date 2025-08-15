@@ -15,14 +15,15 @@
     "@types/dompurify": "^3.0.5",
     "@types/sortablejs": "^1.15.8",
     "axios": "^1.6.2",
-    "dompurify": "^3.0.6",
+    "dompurify": "^3.2.6",
     "element-plus": "^2.10.7",
     "highlight.js": "^11.11.1",
-    "markdown-it": "^14.0.0",
+    "markdown-it": "^14.1.0",
     "pinia": "^2.1.7",
     "sortablejs": "^1.15.6",
     "vue": "^3.3.8",
-    "vue-router": "^4.2.5"
+    "vue-router": "^4.2.5",
+    "vuedraggable": "^2.24.3"
   },
   "devDependencies": {
     "@types/node": "^20.9.0",

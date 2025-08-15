@@ -67,7 +67,7 @@
                 <template #header>
                   <div class="card-header">
                     <span>文档章节</span>
-                    <el-button type="primary" size="small" @click="handleAddSection">
+                    <el-button type="primary" size="small" @click="addSection">
                       <el-icon><Plus /></el-icon>
                       添加章节
                     </el-button>
@@ -77,11 +77,11 @@
                 <SectionList
                   :sections="sections"
                   :loading="sectionsLoading"
-                  @add-section="handleAddSection"
-                  @edit-section="handleEditSection"
-                  @preview-section="handlePreviewSection"
-                  @delete-section="handleDeleteSection"
-                  @reorder-sections="handleReorderSections"
+                  @add-section="addSection"
+                  @edit-section="editSection"
+                  @preview-section="previewSection"
+                  @delete-section="deleteSection"
+                  @reorder-sections="reorderSections"
                 />
               </el-card>
             </div>
@@ -122,39 +122,8 @@
               </template>
 
               <div class="config-content">
-                <div class="config-item">
-                  <label>项目名称</label>
-                  <div class="config-value">{{ project.project_name }}</div>
-                </div>
-                <div class="config-item">
-                  <label>项目类型</label>
-                  <div class="config-value">
-                    {{ project.project_type === 'code' ? '代码文件' : '操作文档' }}
-                  </div>
-                </div>
-                <div class="config-item">
-                  <label>文件数量</label>
-                  <div class="config-value">
-                    {{ project.project_type === 'code' ? files.length : sections.length }}
-                  </div>
-                </div>
-
-                <el-divider />
-
-                <div class="config-actions">
-                  <el-button type="text" size="small" @click="showProjectSettings = true">
-                    <el-icon><Setting /></el-icon>
-                    项目配置
-                  </el-button>
-                  <el-button type="text" size="small" @click="editProject">
-                    <el-icon><Edit /></el-icon>
-                    编辑项目
-                  </el-button>
-                  <el-button type="text" size="small" @click="deleteProject" class="danger">
-                    <el-icon><Delete /></el-icon>
-                    删除项目
-                  </el-button>
-                </div>
+                <!-- 配置选项将在后续任务中实现 -->
+                <p>配置选项开发中...</p>
               </div>
             </el-card>
 
@@ -164,12 +133,10 @@
                 <span>导出历史</span>
               </template>
 
-              <ExportHistory
-                :project-id="projectId"
-                @refresh="handleExportRefresh"
-                @download="handleExportDownload"
-                @view-detail="handleExportViewDetail"
-              />
+              <div class="history-content">
+                <!-- 导出历史将在后续任务中实现 -->
+                <p>导出历史开发中...</p>
+              </div>
             </el-card>
           </div>
         </el-col>
@@ -257,13 +224,6 @@
       :section="currentSection"
       @saved="handleSectionSaved"
     />
-
-    <!-- 项目配置对话框 -->
-    <ProjectSettings
-      v-model="showProjectSettings"
-      :project="project"
-      @saved="handleProjectSettingsSaved"
-    />
   </div>
 </template>
 
@@ -276,9 +236,7 @@ import {
   Edit,
   View,
   Download,
-  Plus,
-  Setting,
-  Delete
+  Plus
 } from '@element-plus/icons-vue'
 import type { Project, ProjectFile } from '@/types'
 import { projectApi, fileApi, manualApi } from '@/utils/api'
@@ -290,8 +248,6 @@ import CodePreview from '@/components/CodePreview.vue'
 import HtmlPreview from '@/components/HtmlPreview.vue'
 import SectionList from '@/components/SectionList.vue'
 import SectionEditor from '@/components/SectionEditor.vue'
-import ProjectSettings from '@/components/ProjectSettings.vue'
-import ExportHistory from '@/components/ExportHistory.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -309,7 +265,6 @@ const showLanguageDialog = ref(false)
 const showPreviewDialog = ref(false)
 const showHtmlPreviewDialog = ref(false)
 const showSectionEditor = ref(false)
-const showProjectSettings = ref(false)
 const editLoading = ref(false)
 const currentFile = ref<ProjectFile | null>(null)
 const currentSection = ref<any>(null)
@@ -651,25 +606,25 @@ const fetchProjectSections = async () => {
 }
 
 // 添加章节
-const handleAddSection = () => {
+const addSection = () => {
   currentSection.value = null
   showSectionEditor.value = true
 }
 
 // 编辑章节
-const handleEditSection = (section: any) => {
+const editSection = (section: any) => {
   currentSection.value = section
   showSectionEditor.value = true
 }
 
 // 预览章节
-const handlePreviewSection = (section: any) => {
+const previewSection = (section: any) => {
   // TODO: 实现章节预览功能
   ElMessage.info('章节预览功能开发中...')
 }
 
 // 删除章节
-const handleDeleteSection = async (section: any) => {
+const deleteSection = async (section: any) => {
   try {
     const response = await manualApi.deleteSection(section.id)
 
@@ -687,7 +642,7 @@ const handleDeleteSection = async (section: any) => {
 }
 
 // 重新排序章节
-const handleReorderSections = async (newSections: any[]) => {
+const reorderSections = async (newSections: any[]) => {
   if (!project.value) return
 
   try {
@@ -718,30 +673,6 @@ const handleReorderSections = async (newSections: any[]) => {
 const handleSectionSaved = async () => {
   showSectionEditor.value = false
   await fetchProjectSections()
-}
-
-// 处理项目配置保存成功
-const handleProjectSettingsSaved = async (updatedProject: Project) => {
-  showProjectSettings.value = false
-  project.value = updatedProject
-  ElMessage.success('项目配置已更新')
-}
-
-// 处理导出历史刷新
-const handleExportRefresh = () => {
-  // 导出历史组件会自动刷新
-}
-
-// 处理导出文件下载
-const handleExportDownload = (exportItem: any) => {
-  // TODO: 实现文件下载功能
-  ElMessage.info('下载功能开发中...')
-}
-
-// 处理查看导出详情
-const handleExportViewDetail = (exportItem: any) => {
-  // TODO: 实现查看详情功能
-  ElMessage.info('详情查看功能开发中...')
 }
 
 // 组件挂载时获取数据

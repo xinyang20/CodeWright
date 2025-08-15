@@ -22,6 +22,9 @@ class Project(Base):
     owner = relationship("User", back_populates="projects")
     project_items = relationship("ProjectItem", back_populates="project", cascade="all, delete-orphan")
     manual_sections = relationship("ManualSection", back_populates="project", cascade="all, delete-orphan")
+    settings = relationship("ProjectSettings", back_populates="project", cascade="all, delete-orphan", uselist=False)
+    export_histories = relationship("ExportHistory", back_populates="project", cascade="all, delete-orphan")
+    manual_sections = relationship("ManualSection", back_populates="project", cascade="all, delete-orphan")
     export_histories = relationship("ExportHistory", back_populates="project", cascade="all, delete-orphan")
     export_jobs = relationship("ExportJob", back_populates="project", cascade="all, delete-orphan")
     

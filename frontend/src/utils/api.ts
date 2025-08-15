@@ -128,22 +128,86 @@ export const fileApi = {
 
   // 重新排序项目文件
   reorderProjectFiles: (projectId: number, fileOrders: any[]): Promise<ApiResponse> =>
-    api.put(`/projects/${projectId}/files/reorder`, fileOrders),
+    api.put(`/projects/${projectId}/reorder-files`, fileOrders),
+
+  // 项目配置相关
+  getProjectSettings: (projectId: number): Promise<ApiResponse> =>
+    api.get(`/projects/${projectId}/settings`),
+
+  updateProjectSettings: (projectId: number, settings: any): Promise<ApiResponse> =>
+    api.put(`/projects/${projectId}/settings`, settings),
+
+  resetProjectSettings: (projectId: number): Promise<ApiResponse> =>
+    api.post(`/projects/${projectId}/settings/reset`),
+
+  // 导出历史相关
+  getProjectExportHistory: (projectId: number, params?: any): Promise<ApiResponse> =>
+    api.get(`/projects/${projectId}/exports`, { params }),
+
+  getUserExportHistory: (params?: any): Promise<ApiResponse> =>
+    api.get('/exports', { params }),
+
+  getExportStatistics: (): Promise<ApiResponse> =>
+    api.get('/exports/statistics'),
+
+  deleteExportRecord: (exportId: number): Promise<ApiResponse> =>
+    api.delete(`/exports/${exportId}`),
+
+  getExportDetail: (exportId: number): Promise<ApiResponse> =>
+    api.get(`/exports/${exportId}`),
 
   // 获取代码高亮CSS
   getHighlightCss: (): Promise<ApiResponse> =>
     api.get('/files/highlight/css')
 }
 
+// 操作文档相关API
+export const manualApi = {
+  // 创建章节
+  createSection: (projectId: number, data: {
+    title: string
+    body_markdown?: string
+    image_file_id?: number
+  }): Promise<ApiResponse> =>
+    api.post(`/manual/projects/${projectId}/sections`, data),
+
+  // 获取项目章节列表
+  getProjectSections: (projectId: number): Promise<ApiResponse> =>
+    api.get(`/manual/projects/${projectId}/sections`),
+
+  // 获取章节详情
+  getSection: (sectionId: number): Promise<ApiResponse> =>
+    api.get(`/manual/sections/${sectionId}`),
+
+  // 更新章节
+  updateSection: (sectionId: number, data: {
+    title?: string
+    body_markdown?: string
+    image_file_id?: number
+  }): Promise<ApiResponse> =>
+    api.put(`/manual/sections/${sectionId}`, data),
+
+  // 删除章节
+  deleteSection: (sectionId: number): Promise<ApiResponse> =>
+    api.delete(`/manual/sections/${sectionId}`),
+
+  // 重新排序章节
+  reorderSections: (projectId: number, sections: Array<{
+    id: number
+    order_index: number
+  }>): Promise<ApiResponse> =>
+    api.put(`/manual/projects/${projectId}/sections/reorder`, { sections })
+}
+
 // 导出相关API
 export const exportApi = {
-  exportProject: (projectId: number): Promise<ApiResponse> => 
+  exportProject: (projectId: number): Promise<ApiResponse> =>
     api.post(`/projects/${projectId}/export`),
-  
-  getExportStatus: (jobId: string): Promise<ApiResponse> => 
+
+  getExportStatus: (jobId: string): Promise<ApiResponse> =>
     api.get(`/exports/${jobId}`),
-  
-  downloadExport: (jobId: string): string => 
+
+  downloadExport: (jobId: string): string =>
     `${api.defaults.baseURL}/exports/${jobId}/download`
 }
 
