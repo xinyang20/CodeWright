@@ -231,7 +231,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   padding: 16px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--cw-border);
   border-radius: 8px;
   background-color: #fff;
   transition: all 0.3s ease;
@@ -239,19 +239,19 @@ onUnmounted(() => {
 }
 
 .file-item:hover {
-  border-color: #5c7cfa;
-  box-shadow: 0 2px 8px rgba(92, 124, 250, 0.15);
+  border-color: var(--cw-blue-200);
+  box-shadow: var(--cw-shadow-md);
 }
 
 .drag-handle {
   margin-right: 12px;
-  color: #c0c4cc;
+  color: var(--cw-text-subtle);
   cursor: grab;
   padding: 4px;
 }
 
 .drag-handle:hover {
-  color: #5c7cfa;
+  color: var(--cw-blue-600);
 }
 
 .drag-handle:active {
@@ -266,7 +266,7 @@ onUnmounted(() => {
 
 .file-icon {
   margin-right: 12px;
-  color: #5c7cfa;
+  color: var(--cw-blue-600);
   font-size: 20px;
 }
 
@@ -296,11 +296,11 @@ onUnmounted(() => {
   content: '•';
   position: absolute;
   right: -8px;
-  color: #d9d9d9;
+  color: var(--cw-border-strong);
 }
 
 .file-order {
-  color: #5c7cfa !important;
+  color: var(--cw-blue-600) !important;
   font-weight: 500;
 }
 
@@ -319,13 +319,13 @@ onUnmounted(() => {
 /* 拖拽状态样式 */
 .sortable-ghost {
   opacity: 0.5;
-  background-color: #f8f9ff;
-  border-color: #5c7cfa;
+  background-color: var(--cw-blue-50);
+  border-color: var(--cw-blue-400);
 }
 
 .sortable-chosen {
-  background-color: #f8f9ff;
-  border-color: #5c7cfa;
+  background-color: var(--cw-blue-50);
+  border-color: var(--cw-blue-400);
 }
 
 .sortable-drag {

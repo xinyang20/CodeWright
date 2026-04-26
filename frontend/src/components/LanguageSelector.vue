@@ -257,13 +257,13 @@ defineExpose({
   display: flex;
   align-items: center;
   padding: 16px;
-  background-color: #f8f9fa;
+  background-color: var(--cw-blue-25);
   border-radius: 8px;
 }
 
 .file-icon {
   margin-right: 12px;
-  color: #5c7cfa;
+  color: var(--cw-blue-600);
   font-size: 20px;
 }
 
@@ -301,9 +301,9 @@ defineExpose({
 
 .auto-language {
   padding: 12px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--cw-border);
   border-radius: 6px;
-  background-color: #fafafa;
+  background-color: var(--cw-blue-25);
 }
 
 .language-option {
@@ -333,7 +333,7 @@ defineExpose({
   display: flex;
   align-items: center;
   padding: 8px 12px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--cw-border);
   border-radius: 6px;
   background-color: #fff;
   cursor: pointer;
@@ -341,13 +341,13 @@ defineExpose({
 }
 
 .language-item:hover {
-  border-color: #5c7cfa;
-  background-color: #f8f9ff;
+  border-color: var(--cw-blue-300);
+  background-color: var(--cw-blue-50);
 }
 
 .language-item.active {
-  border-color: #5c7cfa;
-  background-color: #5c7cfa;
+  border-color: var(--cw-blue-500);
+  background-color: var(--cw-blue-500);
   color: white;
 }
 

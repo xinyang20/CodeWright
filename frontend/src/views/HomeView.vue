@@ -57,21 +57,21 @@
           <div class="feature-grid">
             <div class="feature-card">
               <div class="feature-header">
-                <span class="feature-icon">📄</span>
+                <span class="feature-icon">Code</span>
                 <span>代码文件构建</span>
               </div>
               <p>支持多种编程语言的语法高亮，自动排版，生成规范的代码文档</p>
             </div>
             <div class="feature-card">
               <div class="feature-header">
-                <span class="feature-icon">🖼️</span>
+                <span class="feature-icon">Doc</span>
                 <span>操作文档构建</span>
               </div>
               <p>图文并茂的操作手册生成，支持模板化文档，提升材料专业度</p>
             </div>
             <div class="feature-card">
               <div class="feature-header">
-                <span class="feature-icon">⬇️</span>
+                <span class="feature-icon">PDF</span>
                 <span>PDF 导出</span>
               </div>
               <p>一键导出高质量PDF文档，符合软著申请要求，支持中文字体</p>
@@ -89,6 +89,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useRouter } from 'vue-router'
 
@@ -106,6 +107,7 @@ const handleLogout = () => {
 <style scoped>
 .home {
   min-height: 100vh;
+  background: var(--cw-bg);
 }
 
 .container {
@@ -115,9 +117,10 @@ const handleLogout = () => {
 }
 
 .header {
-  background: #fff;
-  border-bottom: 1px solid #e4e7ed;
-  padding: 16px 0;
+  background: rgba(255, 255, 255, 0.86);
+  border-bottom: 1px solid var(--cw-border);
+  padding: 14px 0;
+  backdrop-filter: blur(18px);
 }
 
 .header-content {
@@ -131,12 +134,13 @@ const handleLogout = () => {
 
 .logo h1 {
   margin: 0;
-  color: #2f54eb;
+  color: var(--cw-text);
   font-size: 24px;
+  letter-spacing: -0.04em;
 }
 
 .subtitle {
-  color: #666;
+  color: var(--cw-text-muted);
   font-size: 14px;
   margin-left: 8px;
 }
@@ -146,43 +150,11 @@ const handleLogout = () => {
   gap: 12px;
 }
 
-.btn {
-  padding: 8px 16px;
-  border: 1px solid #d9d9d9;
-  border-radius: 6px;
-  background: #fff;
-  color: #333;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s;
-}
-
-.btn:hover {
-  border-color: #2f54eb;
-  color: #2f54eb;
-}
-
-.btn-primary {
-  background: #2f54eb;
-  color: #fff;
-  border-color: #2f54eb;
-}
-
-.btn-primary:hover {
-  background: #1d39c4;
-  border-color: #1d39c4;
-}
-
-.btn-large {
-  padding: 12px 24px;
-  font-size: 16px;
-}
-
 .main {
   flex: 1;
   max-width: 1200px;
   margin: 0 auto;
-  padding: 60px 24px;
+  padding: 72px 24px 48px;
   width: 100%;
 }
 
@@ -192,16 +164,31 @@ const handleLogout = () => {
 }
 
 .hero h2 {
-  font-size: 36px;
-  color: #111;
-  margin-bottom: 16px;
+  max-width: 780px;
+  margin: 0 auto 18px;
+  font-size: clamp(36px, 7vw, 68px);
+  line-height: 1.02;
+  color: var(--cw-text);
+  letter-spacing: -0.06em;
+  font-weight: 820;
+}
+
+.hero h2::after {
+  content: "";
+  display: block;
+  width: 86px;
+  height: 4px;
+  margin: 24px auto 0;
+  border-radius: 999px;
+  background: var(--cw-blue-400);
 }
 
 .hero-description {
+  max-width: 680px;
+  margin: 0 auto 32px;
   font-size: 18px;
-  color: #666;
-  margin-bottom: 32px;
-  line-height: 1.6;
+  color: var(--cw-text-muted);
+  line-height: 1.75;
 }
 
 .hero-buttons {
@@ -209,60 +196,92 @@ const handleLogout = () => {
 }
 
 .features {
-  margin-top: 60px;
+  margin-top: 72px;
 }
 
 .features h3 {
   text-align: center;
   font-size: 28px;
-  margin-bottom: 40px;
-  color: #111;
+  margin-bottom: 28px;
+  color: var(--cw-text);
+  letter-spacing: -0.04em;
 }
 
 .feature-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 24px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
 }
 
 .feature-card {
-  text-align: center;
-  padding: 32px 24px;
-  border: 1px solid #e4e7ed;
-  border-radius: 6px;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  padding: 26px;
+  border: 1px solid var(--cw-border);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: var(--cw-shadow-sm);
+}
+
+.feature-card:hover {
+  border-color: var(--cw-blue-200);
+  box-shadow: var(--cw-shadow-md);
 }
 
 .feature-header {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   margin-bottom: 16px;
 }
 
 .feature-icon {
-  font-size: 32px;
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  background: var(--cw-blue-50);
+  color: var(--cw-blue-700);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .feature-header span:last-child {
-  font-size: 18px;
-  font-weight: 600;
-  color: #111;
+  font-size: 17px;
+  font-weight: 720;
+  color: var(--cw-text);
 }
 
 .feature-card p {
-  color: #666;
-  line-height: 1.6;
+  color: var(--cw-text-muted);
+  line-height: 1.75;
   margin: 0;
 }
 
 .footer {
-  background: #f5f5f5;
+  background: transparent;
   text-align: center;
-  color: #666;
-  border-top: 1px solid #e4e7ed;
+  color: var(--cw-text-subtle);
+  border-top: 1px solid var(--cw-border);
   padding: 24px 0;
+}
+
+@media (max-width: 720px) {
+  .header-content,
+  .nav-buttons {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .header-content {
+    gap: 16px;
+  }
+
+  .nav-buttons {
+    width: 100%;
+  }
+
+  .nav-buttons .btn {
+    width: 100%;
+  }
 }
 </style>

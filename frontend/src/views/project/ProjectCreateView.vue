@@ -95,8 +95,10 @@
             <el-form-item label="代码格式化">
               <el-checkbox-group v-model="form.code_options.formatting">
                 <el-checkbox value="line_numbers">显示行号</el-checkbox>
+                <el-checkbox value="continuous_line_numbers">跨文件连续行号</el-checkbox>
                 <el-checkbox value="highlight_syntax">语法高亮</el-checkbox>
                 <el-checkbox value="wrap_lines">自动换行</el-checkbox>
+                <el-checkbox value="file_name_bold">文件名加粗</el-checkbox>
               </el-checkbox-group>
             </el-form-item>
 
@@ -140,9 +142,44 @@
                 <el-option label="标准模板" value="standard" />
                 <el-option label="详细模板" value="detailed" />
                 <el-option label="简洁模板" value="simple" />
+                <el-option
+                  v-for="template in publishedTemplates"
+                  :key="template.id"
+                  :label="`${template.name} v${template.version}`"
+                  :value="String(template.id)"
+                />
               </el-select>
               <div class="form-tip">
-                不同模板包含不同的预设章节结构
+                可选择系统内置模板，也可选择管理员发布的 HTML 模板
+              </div>
+            </el-form-item>
+
+            <el-row :gutter="16">
+              <el-col :xs="24" :sm="8">
+                <el-form-item label="软件名称">
+                  <el-input v-model="form.manual_options.software_name" placeholder="默认使用项目名称" />
+                </el-form-item>
+              </el-col>
+              <el-col :xs="24" :sm="8">
+                <el-form-item label="版本号">
+                  <el-input v-model="form.manual_options.version" placeholder="例如 V1.0.0" />
+                </el-form-item>
+              </el-col>
+              <el-col :xs="24" :sm="8">
+                <el-form-item label="开发者">
+                  <el-input v-model="form.manual_options.developer" placeholder="个人或团队名称" />
+                </el-form-item>
+              </el-col>
+            </el-row>
+
+            <el-form-item label="全局变量替换">
+              <el-switch
+                v-model="form.manual_options.enable_global_variables"
+                active-text="启用"
+                inactive-text="关闭"
+              />
+              <div class="form-tip">
+                正文支持 <code v-pre>{{软件名称}}</code>、<code v-pre>{{版本号}}</code>、<code v-pre>{{开发者}}</code> 等变量
               </div>
             </el-form-item>
 
@@ -179,30 +216,37 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { onMounted, ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { ArrowLeft, Document, Notebook } from '@element-plus/icons-vue'
-import type { ProjectCreateRequest } from '@/types'
-import { projectApi } from '@/utils/api'
+import type { TemplateInfo } from '@/types'
+import { projectApi, settingsApi } from '@/utils/api'
 
 const router = useRouter()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
+const publishedTemplates = ref<TemplateInfo[]>([])
 
 // 表单数据
 const form = reactive({
   project_name: '',
   project_type: 'code',
   code_options: {
-    formatting: ['line_numbers', 'highlight_syntax'],
+    formatting: ['line_numbers', 'highlight_syntax', 'wrap_lines', 'file_name_bold'],
     layout: 'single_column',
     font_size: '14px',
-    export_options: ['include_toc']
+    export_options: ['include_toc', 'include_summary'],
+    template_id: null as number | null
   },
   manual_options: {
     template: 'standard',
-    default_sections: ['overview', 'installation', 'usage']
+    template_id: null as number | null,
+    default_sections: ['overview', 'installation', 'usage'],
+    software_name: '',
+    version: '',
+    developer: '',
+    enable_global_variables: true
   }
 })
 
@@ -237,6 +281,8 @@ const handleSubmit = async () => {
     if (form.project_type === 'code') {
       submitData.code_options = form.code_options
     } else if (form.project_type === 'manual') {
+      const templateId = Number(form.manual_options.template)
+      form.manual_options.template_id = Number.isFinite(templateId) ? templateId : null
       submitData.manual_options = form.manual_options
     }
 
@@ -245,7 +291,7 @@ const handleSubmit = async () => {
     if (response.code === 0) {
       ElMessage.success('项目创建成功')
       // 跳转到项目详情页
-      const projectId = response.data.id
+      const projectId = response.data.project_id
       router.push(`/projects/${projectId}`)
     } else {
       ElMessage.error(response.message || '创建项目失败')
@@ -257,6 +303,15 @@ const handleSubmit = async () => {
     loading.value = false
   }
 }
+
+const fetchPublishedTemplates = async () => {
+  const response = await settingsApi.getPublishedTemplates()
+  if (response.code === 0 && response.data) {
+    publishedTemplates.value = response.data.templates
+  }
+}
+
+onMounted(fetchPublishedTemplates)
 </script>
 
 <style scoped>
@@ -316,18 +371,18 @@ const handleSubmit = async () => {
 .type-card {
   cursor: pointer;
   transition: all 0.3s ease;
-  border: 2px solid #e4e7ed;
+  border: 1px solid var(--cw-border);
   margin-bottom: 16px;
 }
 
 .type-card:hover {
-  border-color: #5c7cfa;
-  box-shadow: 0 4px 12px rgba(92, 124, 250, 0.15);
+  border-color: var(--cw-blue-200);
+  box-shadow: var(--cw-shadow-md);
 }
 
 .type-card.active {
-  border-color: #5c7cfa;
-  background-color: #f8f9ff;
+  border-color: var(--cw-blue-400);
+  background-color: var(--cw-blue-50);
 }
 
 .type-radio {
@@ -351,7 +406,7 @@ const handleSubmit = async () => {
 
 .type-icon {
   margin-right: 20px;
-  color: #5c7cfa;
+  color: var(--cw-blue-600);
   flex-shrink: 0;
 }
 
@@ -391,7 +446,7 @@ const handleSubmit = async () => {
   content: '•';
   position: absolute;
   left: 0;
-  color: #5c7cfa;
+  color: var(--cw-blue-500);
 }
 
 .form-actions {

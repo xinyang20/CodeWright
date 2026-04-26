@@ -1,99 +1,54 @@
 <template>
   <el-dialog
     v-model="visible"
-    title="HTML 预览"
+    title="PDF 预览"
     width="95%"
     :before-close="handleClose"
     class="html-preview-dialog"
   >
-    <div class="html-preview" v-loading="loading">
-      <!-- 工具栏 -->
+    <div class="pdf-preview" v-loading="loading">
       <div class="toolbar">
         <div class="toolbar-left">
-          <el-button-group>
-            <el-button 
-              :type="viewMode === 'preview' ? 'primary' : ''"
-              size="small"
-              @click="viewMode = 'preview'"
-            >
-              <el-icon><View /></el-icon>
-              预览
-            </el-button>
-            <el-button 
-              :type="viewMode === 'source' ? 'primary' : ''"
-              size="small"
-              @click="viewMode = 'source'"
-            >
-              <el-icon><Document /></el-icon>
-              源码
-            </el-button>
-            <el-button 
-              :type="viewMode === 'split' ? 'primary' : ''"
-              size="small"
-              @click="viewMode = 'split'"
-            >
-              <el-icon><Grid /></el-icon>
-              分屏
-            </el-button>
-          </el-button-group>
+          <span class="mode-badge">PDF</span>
+          <span class="toolbar-label">预览与导出使用同一套 LaTeX PDF 生成链路</span>
         </div>
-        
+
         <div class="toolbar-center">
           <span class="project-title">{{ project?.project_name }}</span>
         </div>
-        
+
         <div class="toolbar-right">
           <el-button type="text" size="small" @click="refreshPreview">
             <el-icon><Refresh /></el-icon>
             刷新
           </el-button>
-          <el-button type="text" size="small" @click="exportPdf">
+          <el-button type="text" size="small" :loading="exporting" @click="exportPdf">
             <el-icon><Download /></el-icon>
-            导出 PDF
+            下载 PDF
           </el-button>
         </div>
       </div>
 
-      <!-- 内容区域 -->
-      <div class="content-area">
-        <!-- 预览模式 -->
-        <div v-if="viewMode === 'preview'" class="preview-only">
-          <iframe 
-            ref="previewFrame"
-            class="preview-iframe"
-            :srcdoc="htmlContent"
-            @load="handleIframeLoad"
-          ></iframe>
+      <div ref="contentArea" class="content-area">
+        <div v-if="pageNumbers.length === 0 && !loading" class="preview-empty">
+          PDF 预览尚未生成
         </div>
-
-        <!-- 源码模式 -->
-        <div v-else-if="viewMode === 'source'" class="source-only">
-          <div class="source-container">
-            <pre><code v-html="highlightedHtml"></code></pre>
-          </div>
-        </div>
-
-        <!-- 分屏模式 -->
-        <div v-else class="split-view">
-          <div class="split-left">
-            <div class="panel-header">源码</div>
-            <div class="source-container">
-              <pre><code v-html="highlightedHtml"></code></pre>
-            </div>
-          </div>
-          <div class="split-divider"></div>
-          <div class="split-right">
-            <div class="panel-header">预览</div>
-            <iframe 
-              ref="previewFrameSplit"
-              class="preview-iframe"
-              :srcdoc="htmlContent"
-            ></iframe>
+        <div v-else class="pdf-pages">
+          <div
+            v-for="pageNumber in pageNumbers"
+            :key="pageNumber"
+            class="pdf-page"
+          >
+            <canvas
+              :ref="(element) => setPageCanvas(pageNumber, element)"
+              class="pdf-page-canvas"
+            ></canvas>
+            <div class="page-number">第 {{ pageNumber }} / {{ pageCount }} 页</div>
           </div>
         </div>
       </div>
     </div>
-    
+
     <template #footer>
       <div class="dialog-footer">
         <el-button @click="handleClose">关闭</el-button>
@@ -103,424 +58,368 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { nextTick, ref, watch, onBeforeUnmount, type ComponentPublicInstance } from 'vue'
 import { ElMessage } from 'element-plus'
-import { 
-  View, 
-  Document, 
-  Grid, 
-  Refresh, 
-  Download 
-} from '@element-plus/icons-vue'
-import hljs from 'highlight.js'
-import 'highlight.js/styles/default.css'
-import type { Project, ProjectFile } from '@/types'
-import { projectApi, fileApi } from '@/utils/api'
+import { Refresh, Download } from '@element-plus/icons-vue'
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url'
+import type { PDFDocumentProxy } from 'pdfjs-dist'
+import type { Project } from '@/types'
+import { projectApi } from '@/utils/api'
 
-// Props
 interface Props {
   modelValue: boolean
   project: Project | null
+  exportOptions?: Record<string, any>
 }
 
 const props = defineProps<Props>()
 
-// Emits
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
 }>()
 
-// 响应式数据
 const visible = ref(false)
 const loading = ref(false)
-const viewMode = ref<'preview' | 'source' | 'split'>('preview')
-const htmlContent = ref('')
-const sourceCode = ref('')
-const previewFrame = ref<HTMLIFrameElement>()
-const previewFrameSplit = ref<HTMLIFrameElement>()
+const exporting = ref(false)
+const contentArea = ref<HTMLElement>()
+const pageNumbers = ref<number[]>([])
+const pageCount = ref(0)
+const pageCanvases = new Map<number, HTMLCanvasElement>()
+let renderToken = 0
+let activePdfDocument: PDFDocumentProxy | null = null
 
-// 计算属性
-const highlightedHtml = computed(() => {
-  if (!sourceCode.value) return ''
-  return hljs.highlight(sourceCode.value, { language: 'html' }).value
-})
-
-// 监听 modelValue 变化
 watch(() => props.modelValue, (newValue) => {
   visible.value = newValue
   if (newValue && props.project) {
     generatePreview()
   }
-})
+}, { immediate: true })
 
-// 监听 visible 变化
-watch(visible, (newValue) => {
-  emit('update:modelValue', newValue)
-  if (!newValue) {
-    // 清理数据
-    htmlContent.value = ''
-    sourceCode.value = ''
+watch(() => props.project?.id, () => {
+  if (visible.value && props.project) {
+    generatePreview()
   }
 })
 
-// 生成HTML预览
+watch(() => props.exportOptions, () => {
+  if (visible.value && props.project) {
+    generatePreview()
+  }
+}, { deep: true })
+
+watch(visible, (newValue) => {
+  emit('update:modelValue', newValue)
+  if (!newValue) {
+    clearPreview()
+  }
+})
+
+const currentOptions = () => props.exportOptions || {}
+
+const clearPreview = () => {
+  renderToken += 1
+  pageNumbers.value = []
+  pageCount.value = 0
+  pageCanvases.clear()
+  if (activePdfDocument) {
+    activePdfDocument.destroy()
+    activePdfDocument = null
+  }
+}
+
 const generatePreview = async () => {
   if (!props.project) return
 
   try {
     loading.value = true
-    
-    // 获取项目文件列表
-    const filesResponse = await fileApi.getProjectFiles(props.project.id)
-    if (filesResponse.code !== 0) {
-      throw new Error(filesResponse.message || '获取项目文件失败')
-    }
-    
-    const files = filesResponse.data.files
-    if (files.length === 0) {
-      ElMessage.warning('项目中没有文件')
-      return
-    }
-    
-    // 生成HTML内容
-    const html = await buildHtmlContent(files)
-    htmlContent.value = html
-    sourceCode.value = html
-    
+    const pdf = await projectApi.previewProjectPdf(props.project.id, currentOptions())
+    await renderPdf(pdf, renderToken + 1)
   } catch (error) {
-    console.error('生成预览失败:', error)
-    ElMessage.error('生成预览失败')
+    console.error('生成PDF预览失败:', error)
+    ElMessage.error(error instanceof Error ? error.message : 'PDF 预览失败')
+    clearPreview()
   } finally {
     loading.value = false
   }
 }
 
-// 构建HTML内容
-const buildHtmlContent = async (files: ProjectFile[]) => {
-  const sortedFiles = files
-    .filter(f => f.include_in_export)
-    .sort((a, b) => a.order_index - b.order_index)
-  
-  let htmlParts = []
-  
-  // HTML头部
-  htmlParts.push(`<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${props.project?.project_name || '代码文档'}</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #fff;
-        }
-        .header {
-            text-align: center;
-            margin-bottom: 40px;
-            padding-bottom: 20px;
-            border-bottom: 2px solid #5c7cfa;
-        }
-        .header h1 {
-            color: #5c7cfa;
-            margin: 0;
-            font-size: 2.5em;
-        }
-        .toc {
-            background-color: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 30px;
-        }
-        .toc h2 {
-            margin-top: 0;
-            color: #5c7cfa;
-        }
-        .toc ul {
-            list-style: none;
-            padding: 0;
-        }
-        .toc li {
-            margin: 8px 0;
-        }
-        .toc a {
-            color: #5c7cfa;
-            text-decoration: none;
-            padding: 4px 8px;
-            border-radius: 4px;
-            transition: background-color 0.3s;
-        }
-        .toc a:hover {
-            background-color: #e3f2fd;
-        }
-        .file-section {
-            margin-bottom: 40px;
-            border: 1px solid #e4e7ed;
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        .file-header {
-            background-color: #5c7cfa;
-            color: white;
-            padding: 12px 20px;
-            font-weight: 600;
-        }
-        .file-content {
-            background-color: #f8f9fa;
-        }
-        .file-content pre {
-            margin: 0;
-            padding: 20px;
-            overflow-x: auto;
-            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-            font-size: 13px;
-            line-height: 1.5;
-        }
-        .highlight {
-            background-color: transparent;
-        }
-        .linenos {
-            color: #666;
-            background-color: #f0f0f0;
-            padding-right: 8px;
-            border-right: 1px solid #ddd;
-            user-select: none;
-        }
-    </style>
-</head>
-<body>`)
-
-  // 页面头部
-  htmlParts.push(`
-    <div class="header">
-        <h1>${props.project?.project_name || '代码文档'}</h1>
-        <p>生成时间：${new Date().toLocaleString('zh-CN')}</p>
-    </div>`)
-
-  // 目录
-  if (sortedFiles.length > 1) {
-    htmlParts.push(`
-    <div class="toc">
-        <h2>目录</h2>
-        <ul>`)
-    
-    sortedFiles.forEach((file, index) => {
-      const fileName = file.display_name || file.original_filename
-      htmlParts.push(`            <li><a href="#file-${index}">${fileName}</a></li>`)
-    })
-    
-    htmlParts.push(`        </ul>
-    </div>`)
-  }
-
-  // 文件内容
-  for (let i = 0; i < sortedFiles.length; i++) {
-    const file = sortedFiles[i]
-    const fileName = file.display_name || file.original_filename
-    
-    try {
-      // 获取文件预览
-      const previewResponse = await fileApi.previewFile(
-        file.file_id, 
-        file.language_override
-      )
-      
-      if (previewResponse.code === 0) {
-        const previewData = previewResponse.data
-        
-        htmlParts.push(`
-    <div class="file-section" id="file-${i}">
-        <div class="file-header">
-            ${fileName}
-        </div>
-        <div class="file-content">
-            ${previewData.highlighted_html || `<pre><code>${previewData.content}</code></pre>`}
-        </div>
-    </div>`)
-      }
-    } catch (error) {
-      console.error(`获取文件 ${fileName} 预览失败:`, error)
-      htmlParts.push(`
-    <div class="file-section" id="file-${i}">
-        <div class="file-header">
-            ${fileName}
-        </div>
-        <div class="file-content">
-            <pre><code>无法加载文件内容</code></pre>
-        </div>
-    </div>`)
+const ensurePdfJs = async () => {
+  const promiseWithResolvers = Promise as typeof Promise & {
+    withResolvers?: <T>() => {
+      promise: Promise<T>
+      resolve: (value: T | PromiseLike<T>) => void
+      reject: (reason?: unknown) => void
     }
   }
 
-  // HTML尾部
-  htmlParts.push(`
-</body>
-</html>`)
+  // pdf.js 5 relies on this modern API; define it before dynamically loading pdf.js.
+  if (!promiseWithResolvers.withResolvers) {
+    promiseWithResolvers.withResolvers = <T>() => {
+      let resolve!: (value: T | PromiseLike<T>) => void
+      let reject!: (reason?: unknown) => void
+      const promise = new Promise<T>((promiseResolve, promiseReject) => {
+        resolve = promiseResolve
+        reject = promiseReject
+      })
+      return { promise, resolve, reject }
+    }
+  }
 
-  return htmlParts.join('')
+  const pdfjs = await import('pdfjs-dist')
+  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+  return pdfjs
 }
 
-// 刷新预览
+const renderPdf = async (pdf: Blob, token: number) => {
+  renderToken = token
+  if (activePdfDocument) {
+    await activePdfDocument.destroy()
+    activePdfDocument = null
+  }
+
+  pageNumbers.value = []
+  pageCount.value = 0
+  pageCanvases.clear()
+
+  const pdfjs = await ensurePdfJs()
+  const data = new Uint8Array(await pdf.arrayBuffer())
+  const loadingTask = pdfjs.getDocument({ data })
+  const pdfDocument = await loadingTask.promise
+  if (renderToken !== token) {
+    await pdfDocument.destroy()
+    return
+  }
+
+  activePdfDocument = pdfDocument
+  pageCount.value = pdfDocument.numPages
+  pageNumbers.value = Array.from({ length: pdfDocument.numPages }, (_, index) => index + 1)
+  await nextTick()
+
+  const availableWidth = Math.max((contentArea.value?.clientWidth || 960) - 72, 480)
+  const pixelRatio = window.devicePixelRatio || 1
+
+  for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+    if (renderToken !== token) return
+
+    const page = await pdfDocument.getPage(pageNumber)
+    const baseViewport = page.getViewport({ scale: 1 })
+    const scale = Math.min(availableWidth / baseViewport.width, 1.65)
+    const viewport = page.getViewport({ scale })
+    const canvas = pageCanvases.get(pageNumber)
+    const context = canvas?.getContext('2d')
+    if (!canvas || !context) continue
+
+    canvas.width = Math.floor(viewport.width * pixelRatio)
+    canvas.height = Math.floor(viewport.height * pixelRatio)
+    canvas.style.width = `${viewport.width}px`
+    canvas.style.height = `${viewport.height}px`
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+
+    await page.render({
+      canvas,
+      canvasContext: context,
+      viewport
+    }).promise
+  }
+}
+
 const refreshPreview = () => {
   generatePreview()
 }
 
-// 导出PDF
 const exportPdf = async () => {
   if (!props.project) return
 
   try {
+    exporting.value = true
     ElMessage.info('正在生成PDF，请稍候...')
-
-    // 使用默认导出选项
-    const exportOptions = {
-      include_toc: true,
-      include_summary: true,
-      watermark: false
-    }
-
-    const response = await projectApi.exportProjectPdf(props.project.id, exportOptions)
-
-    // 创建下载链接
-    const blob = new Blob([response], { type: 'application/pdf' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${props.project.project_name}.pdf`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
-
+    const blob = await projectApi.exportProjectPdf(props.project.id, currentOptions())
+    downloadPdfBlob(blob, `${props.project.project_name}.pdf`)
     ElMessage.success('PDF导出成功')
   } catch (error) {
     console.error('导出PDF失败:', error)
-    ElMessage.error('导出PDF失败')
+    ElMessage.error(error instanceof Error ? error.message : '导出PDF失败')
+  } finally {
+    exporting.value = false
   }
 }
 
-// 处理iframe加载
-const handleIframeLoad = () => {
-  // iframe加载完成后的处理
+const downloadPdfBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
 }
 
-// 处理关闭
+const setPageCanvas = (pageNumber: number, element: Element | ComponentPublicInstance | null) => {
+  if (element instanceof HTMLCanvasElement) {
+    pageCanvases.set(pageNumber, element)
+  } else {
+    pageCanvases.delete(pageNumber)
+  }
+}
+
 const handleClose = () => {
   visible.value = false
 }
 
-// 暴露方法给父组件
 defineExpose({
   close: handleClose,
   refresh: refreshPreview
 })
+
+onBeforeUnmount(() => {
+  clearPreview()
+})
 </script>
 
 <style scoped>
-.html-preview-dialog :deep(.el-dialog) {
-  margin-top: 2vh;
-  margin-bottom: 2vh;
-  height: 96vh;
+:global(.html-preview-dialog.el-dialog),
+:global(.html-preview-dialog .el-dialog) {
+  width: 94vw !important;
+  max-width: 94vw;
+  margin-top: 3vh;
+  margin-bottom: 3vh;
+  height: 94vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+:global(.html-preview-dialog .el-dialog__header),
+:global(.html-preview-dialog .el-dialog__footer) {
+  flex: 0 0 auto;
+}
+
+:global(.html-preview-dialog .el-dialog__body) {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
-.html-preview-dialog :deep(.el-dialog__body) {
-  flex: 1;
+:global(.html-preview-dialog .el-dialog__footer) {
   padding: 0;
-  overflow: hidden;
 }
 
-.html-preview {
+.pdf-preview,
+:global(.html-preview-dialog .pdf-preview) {
   height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
 .toolbar {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
+  gap: 16px;
   padding: 12px 16px;
-  border-bottom: 1px solid #e4e7ed;
-  background-color: #f8f9fa;
+  border-bottom: 1px solid var(--cw-border);
+  background-color: var(--cw-surface-soft);
+}
+
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.toolbar-right {
+  justify-content: flex-end;
+}
+
+.mode-badge {
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--cw-blue-50);
+  color: var(--cw-blue-700);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.toolbar-label {
+  color: var(--cw-text-muted);
+  font-size: 13px;
 }
 
 .project-title {
   font-weight: 600;
-  color: #111;
+  color: var(--cw-text);
 }
 
 .content-area {
   flex: 1;
-  overflow: hidden;
-}
-
-.preview-only,
-.source-only {
-  height: 100%;
-}
-
-.preview-iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
-  background-color: #fff;
-}
-
-.source-container {
-  height: 100%;
+  min-height: 0;
   overflow: auto;
-  background-color: #f8f9fa;
+  background: #e9eef5;
 }
 
-.source-container pre {
-  margin: 0;
-  padding: 16px;
-  height: 100%;
-  overflow: auto;
-}
-
-.split-view {
-  display: flex;
-  height: 100%;
-}
-
-.split-left,
-.split-right {
-  flex: 1;
+.pdf-pages {
+  min-height: 100%;
   display: flex;
   flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  padding: 28px;
 }
 
-.split-divider {
-  width: 4px;
-  background-color: #e4e7ed;
-  cursor: col-resize;
+.pdf-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
 }
 
-.panel-header {
-  padding: 8px 12px;
-  background-color: #f0f0f0;
-  border-bottom: 1px solid #e4e7ed;
+.pdf-page-canvas {
+  max-width: 100%;
+  background: #fff;
+  border-radius: 2px;
+  box-shadow: 0 10px 30px rgba(16, 32, 51, 0.18);
+}
+
+.page-number {
+  color: var(--cw-text-muted);
   font-size: 12px;
-  font-weight: 600;
-  color: #666;
 }
 
-.split-left .source-container,
-.split-right .preview-iframe {
-  flex: 1;
+.preview-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--cw-text-muted);
+  font-size: 14px;
 }
 
 .dialog-footer {
   text-align: right;
-  padding: 12px 16px;
-  border-top: 1px solid #e4e7ed;
+  padding: 10px 16px;
+  border-top: 1px solid var(--cw-border);
+}
+
+@media (max-width: 720px) {
+  .toolbar {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .toolbar-center {
+    order: -1;
+  }
+
+  .toolbar-right {
+    justify-content: flex-start;
+  }
 }
 </style>

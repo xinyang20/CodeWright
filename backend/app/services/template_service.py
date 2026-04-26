@@ -4,17 +4,17 @@
 import os
 import uuid
 import shutil
-from pathlib import Path
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from fastapi import UploadFile
 
 from app.models.template import Template
+from app.paths import TEMPLATES_DIR
 
 class TemplateService:
     def __init__(self, db: Session):
         self.db = db
-        self.template_dir = Path("../templates")
+        self.template_dir = TEMPLATES_DIR
         self.template_dir.mkdir(exist_ok=True)
         self._init_default_template()
     
@@ -106,9 +106,18 @@ class TemplateService:
         # 检查文件类型
         if not file.filename.endswith('.html'):
             raise ValueError("模板文件必须是HTML格式")
+
+        existing = self.db.query(Template).filter(
+            Template.name == name,
+            Template.version == version
+        ).first()
+        if existing:
+            raise ValueError("同名同版本模板已存在，请创建新版本")
         
         # 保存模板文件
-        template_filename = f"{name}_{version}_{uuid.uuid4().hex[:8]}.html"
+        safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in name)
+        safe_version = "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in version)
+        template_filename = f"{safe_name}_{safe_version}_{uuid.uuid4().hex[:8]}.html"
         template_path = self.template_dir / template_filename
         
         with open(template_path, "wb") as buffer:

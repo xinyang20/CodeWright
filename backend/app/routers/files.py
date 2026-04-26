@@ -1,13 +1,9 @@
 """
 文件路由
 """
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status
+from fastapi import APIRouter, Depends, UploadFile, File
 from sqlalchemy.orm import Session
-from typing import List, Optional
-import os
-import uuid
-import shutil
-from pathlib import Path
+from typing import Optional
 
 from app.database import get_db
 from app.schemas.common import ResponseModel
@@ -18,12 +14,6 @@ from app.models.user import User
 
 router = APIRouter()
 
-# 允许的文件扩展名
-ALLOWED_EXTENSIONS = {'.py', '.java', '.js', '.ts', '.md', '.txt', '.c', '.cpp', '.h', '.hpp', '.css', '.html', '.xml', '.json', '.yml', '.yaml', '.sql', '.sh', '.bat', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'}
-
-# 最大文件大小 (10MB)
-MAX_FILE_SIZE = 10 * 1024 * 1024
-
 @router.post("/upload", response_model=ResponseModel)
 async def upload_file(
     file: UploadFile = File(...),
@@ -32,26 +22,18 @@ async def upload_file(
 ):
     """上传文件"""
     try:
-        # 检查文件扩展名
-        file_ext = Path(file.filename).suffix.lower()
-        if file_ext not in ALLOWED_EXTENSIONS:
-            return ResponseModel(
-                code=4001,
-                message=f"不支持的文件类型: {file_ext}"
-            )
-
-        # 检查文件大小
+        file_service = FileService(db)
         file_content = await file.read()
-        if len(file_content) > MAX_FILE_SIZE:
+        valid, message = file_service.validate_upload(file.filename or "", len(file_content))
+        if not valid:
             return ResponseModel(
-                code=4002,
-                message="文件大小超过限制 (10MB)"
+                code=2001,
+                message=message
             )
 
         # 重置文件指针
         await file.seek(0)
 
-        file_service = FileService(db)
         uploaded_file = await file_service.save_uploaded_file(
             file, current_user.id, file_content
         )

@@ -1,7 +1,7 @@
 """
 用户相关模式
 """
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 from typing import Optional
 
@@ -17,14 +17,13 @@ class UserLogin(BaseModel):
 
 class UserResponse(BaseModel):
     """用户响应模式"""
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     username: str
     role: str
     is_active: bool
     created_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 class TokenResponse(BaseModel):
     """令牌响应模式"""

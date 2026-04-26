@@ -24,7 +24,6 @@
             placeholder="请输入密码"
             class="form-input"
             required
-            @keyup.enter="handleSubmit"
           />
         </div>
 
@@ -64,7 +63,39 @@ const form = reactive<LoginRequest>({
   password: ''
 })
 
+const getLoginErrorMessage = (error: unknown): string => {
+  if (typeof error === 'string') {
+    return error
+  }
+
+  if (typeof error === 'object' && error !== null) {
+    const apiError = error as {
+      code?: unknown
+      detail?: unknown
+      message?: unknown
+    }
+
+    if (apiError.message === 'Network Error' || apiError.code === 'ERR_NETWORK') {
+      return '无法连接后端服务，请确认后端已启动在 127.0.0.1:8001'
+    }
+
+    if (typeof apiError.message === 'string' && apiError.message.trim()) {
+      return apiError.message
+    }
+
+    if (typeof apiError.detail === 'string' && apiError.detail.trim()) {
+      return apiError.detail
+    }
+  }
+
+  return '登录失败，请检查用户名和密码'
+}
+
 const handleSubmit = async () => {
+  if (authStore.loading) {
+    return
+  }
+
   if (!form.username || !form.password) {
     alert('请填写用户名和密码')
     return
@@ -88,7 +119,7 @@ const handleSubmit = async () => {
     router.push(redirect)
   } catch (error) {
     console.error('登录失败:', error)
-    alert('登录失败，请检查用户名和密码')
+    alert(getLoginErrorMessage(error))
   }
 }
 </script>
@@ -99,15 +130,17 @@ const handleSubmit = async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 24px;
+  background: var(--cw-bg);
 }
 
 .login-container {
-  width: 400px;
-  padding: 40px;
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  width: min(100%, 420px);
+  padding: 34px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--cw-border);
+  border-radius: 22px;
+  box-shadow: var(--cw-shadow-md);
 }
 
 .login-header {
@@ -116,14 +149,15 @@ const handleSubmit = async () => {
 }
 
 .login-header h1 {
-  color: #2f54eb;
-  font-size: 28px;
+  color: var(--cw-text);
+  font-size: 30px;
+  letter-spacing: -0.05em;
   margin-bottom: 8px;
 }
 
 .login-header p {
-  color: #666;
-  font-size: 16px;
+  color: var(--cw-text-muted);
+  font-size: 15px;
 }
 
 .login-form {
@@ -136,54 +170,8 @@ const handleSubmit = async () => {
 
 .form-input {
   width: 100%;
-  padding: 12px 16px;
-  border: 1px solid #d9d9d9;
-  border-radius: 6px;
-  font-size: 16px;
-  transition: border-color 0.3s;
-  box-sizing: border-box;
-}
-
-.form-input:focus {
-  outline: none;
-  border-color: #2f54eb;
-}
-
-.btn {
-  padding: 8px 16px;
-  border: 1px solid #d9d9d9;
-  border-radius: 6px;
-  background: #fff;
-  color: #333;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s;
-}
-
-.btn:hover {
-  border-color: #2f54eb;
-  color: #2f54eb;
-}
-
-.btn-primary {
-  background: #2f54eb;
-  color: #fff;
-  border-color: #2f54eb;
-}
-
-.btn-primary:hover {
-  background: #1d39c4;
-  border-color: #1d39c4;
-}
-
-.btn-large {
-  padding: 12px 24px;
-  font-size: 16px;
-}
-
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+  min-height: 44px;
+  font-size: 15px;
 }
 
 .login-button {
@@ -195,8 +183,9 @@ const handleSubmit = async () => {
 }
 
 .link {
-  color: #2f54eb;
+  color: var(--cw-blue-600);
   text-decoration: none;
+  font-weight: 650;
 }
 
 .link:hover {

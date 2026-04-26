@@ -1,29 +1,34 @@
 """
 CodeWright 后端主应用
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
-import os
 from dotenv import load_dotenv
 
-from app.database import engine, Base
-from app.routers import auth, users, projects, files, exports, admin, settings
+from app.paths import BACKEND_DIR, EXPORTS_DIR, UPLOAD_DIR, ensure_runtime_dirs
 
 # 加载环境变量
-load_dotenv()
+load_dotenv(BACKEND_DIR / ".env")
+
+from app.database import engine, Base, SessionLocal
+from app.routers import auth, users, projects, files, exports, admin, settings
+from app.services.auth_service import AuthService
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时创建数据库表
     Base.metadata.create_all(bind=engine)
-    
-    # 创建必要的目录
-    os.makedirs("../upload", exist_ok=True)
-    os.makedirs("../templates", exist_ok=True)
-    os.makedirs("../exports", exist_ok=True)
+
+    db = SessionLocal()
+    try:
+        AuthService(db).ensure_default_admin()
+    finally:
+        db.close()
+
+    ensure_runtime_dirs()
     
     yield
     
@@ -31,6 +36,8 @@ async def lifespan(app: FastAPI):
     pass
 
 # 创建FastAPI应用
+ensure_runtime_dirs()
+
 app = FastAPI(
     title="CodeWright API",
     description="代码版权工匠 - 软件著作权申请材料准备平台",
@@ -48,8 +55,8 @@ app.add_middleware(
 )
 
 # 静态文件服务
-app.mount("/uploads", StaticFiles(directory="../upload"), name="uploads")
-app.mount("/exports", StaticFiles(directory="../exports"), name="exports")
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+app.mount("/exports", StaticFiles(directory=str(EXPORTS_DIR)), name="exports")
 
 # 注册路由
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["认证"])

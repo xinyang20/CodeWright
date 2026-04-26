@@ -1,60 +1,51 @@
 <template>
   <div id="app">
-    <router-view />
+    <template v-if="showWorkspaceShell">
+      <div class="app-shell">
+        <header class="app-topbar">
+          <div class="app-topbar-inner">
+            <router-link to="/dashboard" class="brand">
+              <span class="brand-mark">C</span>
+              <span>CodeWright</span>
+            </router-link>
+
+            <nav class="app-nav" aria-label="主导航">
+              <router-link to="/dashboard">控制台</router-link>
+              <router-link to="/projects">项目</router-link>
+              <router-link v-if="authStore.isAdmin" to="/admin">管理</router-link>
+            </nav>
+
+            <div class="app-user">
+              <span>{{ authStore.user?.username || '未登录' }}</span>
+              <button class="btn" type="button" @click="handleLogout">退出</button>
+            </div>
+          </div>
+        </header>
+
+        <main class="app-main">
+          <router-view />
+        </main>
+      </div>
+    </template>
+
+    <router-view v-else />
   </div>
 </template>
 
 <script setup lang="ts">
-// 应用根组件
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+
+const route = useRoute()
+const router = useRouter()
+const authStore = useAuthStore()
+
+const publicRouteNames = ['home', 'login', 'register', 'not-found']
+const showWorkspaceShell = computed(() => !publicRouteNames.includes(String(route.name)))
+
+const handleLogout = () => {
+  authStore.logout()
+  router.push('/')
+}
 </script>
-
-<style>
-/* 全局样式 */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-body {
-  font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  background-color: #fafafa;
-  color: #111;
-  line-height: 1.6;
-}
-
-#app {
-  min-height: 100vh;
-}
-
-/* Element Plus 自定义样式 */
-.el-button {
-  border-radius: 6px;
-}
-
-.el-card {
-  border-radius: 6px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-
-.el-input {
-  border-radius: 6px;
-}
-
-/* 工具类 */
-.text-center {
-  text-align: center;
-}
-
-.mb-4 {
-  margin-bottom: 16px;
-}
-
-.mt-4 {
-  margin-top: 16px;
-}
-
-.p-4 {
-  padding: 16px;
-}
-</style>
