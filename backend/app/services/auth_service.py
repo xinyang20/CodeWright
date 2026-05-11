@@ -1,26 +1,25 @@
 """
 认证服务
 """
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
+import bcrypt
 import os
 
 from app.database import get_db
 from app.models.user import User
 from app.schemas.user import UserCreate, UserLogin
 
-# 密码加密上下文
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 # JWT配置
 SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key-here")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("TOKEN_EXPIRE_MINUTES", "1440"))  # 24小时
+DEFAULT_ADMIN_USERNAME = os.getenv("DEFAULT_ADMIN_USERNAME", "admin")
+DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123")
 
 # HTTP Bearer认证
 security = HTTPBearer()
@@ -31,22 +30,55 @@ class AuthService:
     
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
         """验证密码"""
-        return pwd_context.verify(plain_password, hashed_password)
+        return bcrypt.checkpw(
+            plain_password.encode("utf-8"),
+            hashed_password.encode("utf-8")
+        )
     
     def get_password_hash(self, password: str) -> str:
         """获取密码哈希"""
-        return pwd_context.hash(password)
+        return bcrypt.hashpw(
+            password.encode("utf-8"),
+            bcrypt.gensalt()
+        ).decode("utf-8")
     
     def create_access_token(self, data: dict, expires_delta: Optional[timedelta] = None):
         """创建访问令牌"""
         to_encode = data.copy()
         if expires_delta:
-            expire = datetime.utcnow() + expires_delta
+            expire = datetime.now(UTC) + expires_delta
         else:
-            expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+            expire = datetime.now(UTC) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         to_encode.update({"exp": expire})
         encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
         return encoded_jwt
+
+    def ensure_default_admin(self) -> User:
+        """确保系统至少存在一个管理员账号。"""
+        admin_user = self.db.query(User).filter(User.role == "admin").first()
+        if admin_user:
+            return admin_user
+
+        default_admin = self.db.query(User).filter(
+            User.username == DEFAULT_ADMIN_USERNAME
+        ).first()
+
+        if default_admin:
+            default_admin.password_hash = self.get_password_hash(DEFAULT_ADMIN_PASSWORD)
+            default_admin.role = "admin"
+            default_admin.is_active = True
+        else:
+            default_admin = User(
+                username=DEFAULT_ADMIN_USERNAME,
+                password_hash=self.get_password_hash(DEFAULT_ADMIN_PASSWORD),
+                role="admin",
+                is_active=True
+            )
+            self.db.add(default_admin)
+
+        self.db.commit()
+        self.db.refresh(default_admin)
+        return default_admin
     
     async def register_user(self, user_data: UserCreate) -> User:
         """注册用户"""
@@ -58,14 +90,10 @@ class AuthService:
         # 创建新用户
         hashed_password = self.get_password_hash(user_data.password)
         
-        # 检查是否是第一个用户（自动设为管理员）
-        user_count = self.db.query(User).count()
-        role = "admin" if user_count == 0 else "user"
-        
         new_user = User(
             username=user_data.username,
             password_hash=hashed_password,
-            role=role
+            role="user"
         )
         
         self.db.add(new_user)
@@ -126,6 +154,12 @@ async def get_current_user(
     user = db.query(User).filter(User.username == username).first()
     if user is None:
         raise credentials_exception
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="账户已被禁用"
+        )
     
     return user
 

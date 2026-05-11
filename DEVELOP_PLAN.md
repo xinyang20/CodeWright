@@ -56,7 +56,7 @@ CodeWright（代码版权工匠）是一个面向中国大陆用户、仅提供�
 
 **史诗：管理功能 (Admin)**
 
-  * **As an** 管理员, **I want** 系统将第一个注册的账号自动设为管理员，且该账号不可被删除。
+  * **As an** 管理员, **I want** 系统启动时在无管理员账号的情况下自动创建默认管理员 `admin/admin123`，且管理员账号不可被禁用。
   * **As an** 管理员, **I want to** 访问一个独立的“系统设置”页面。
   * **As an** 管理员, **I want to** 管理所有用户账号（如查看列表、禁用/启用账号）。
   * **As an** 管理员, **I want to** 发布和管理系统公告（支持草稿/发布/下线状态）。
@@ -70,8 +70,8 @@ CodeWright（代码版权工匠）是一个面向中国大陆用户、仅提供�
 
   * **性能**：2000 行代码导出目标 < 10 秒（同步渲染基准）；异步模式下导出进入队列可见进度；单文件 ≤ 10MB、项目总量 ≤ 100MB（可配置）；导出阶段对图片按页宽自适应压缩。
   * **可用性**：在线率 99.9%；数据库、模板与上传目录均持久化；建议每日自动备份（数据库与上传目录）。
-  * **安全性**：密码加密存储（bcrypt/Argon2）；前后端采用 JWT 鉴权；上传类型与大小校验；Markdown/HTML 清洗以防 XSS；接口鉴权中间件防止未授权访问。
-  * **可伸缩性**：对象存储/文件系统可插拔；导出任务采用异步队列（Redis）便于横向扩展；前后端无状态便于容器弹性伸缩。
+  * **安全性**：密码加密存储（bcrypt）；前后端采用 JWT 鉴权；上传类型与大小校验；Markdown/HTML 清洗以防 XSS；接口鉴权中间件防止未授权访问。
+  * **可伸缩性**：对象存储/文件系统可插拔；当前版本采用数据库持久化导出任务 + FastAPI 后台任务，保留后续替换为外部队列的扩展空间；前后端无状态便于容器弹性伸缩。
   * **可维护性**：统一编码规范与 CI 流水线；充分注释与文档；前后端分离利于独立演进。
   * **浏览器支持**：Chrome/Edge 最近两个大版本。
 
@@ -80,12 +80,13 @@ CodeWright（代码版权工匠）是一个面向中国大陆用户、仅提供�
 #### **4. 技术选型**
 
   * **前端**：`Vue 3` + `TypeScript`（Composition API）, 构建使用 `Vite`，状态管理 `Pinia`，路由 `Vue Router`，UI 组件库采用 `Element Plus`（注意：Element UI 不兼容 Vue 3，必须使用 Element Plus）。预览链路：`markdown-it`（解析）+ `DOMPurify`（清洗）+ `highlight.js`（仅前端预览高亮）。
-  * **后端**：`FastAPI`（Python 3.10+ 推荐）+ `Pydantic` v2；密码哈希 `bcrypt`/`Argon2`；鉴权 `JWT`。导出采用异步队列（`Redis` + `RQ`/`Celery`），任务可查询进度与结果。
+  * **后端**：`FastAPI`（Python 3.10+ 推荐）+ `Pydantic` v2；密码哈希 `bcrypt`；鉴权 `JWT`。导出采用数据库持久化任务 + FastAPI 后台任务，任务可查询进度与结果。
   * **数据库**：`SQLite`（`SQLAlchemy` ORM）。
   * **PDF 生成**：
       * **代码高亮**：`Pygments`（代码→HTML，支持行号与样式）。
-      * **HTML→PDF**：`WeasyPrint`（支持页眉页脚与样式定制），容器内置中文字体（思源黑体/宋体）。
-  * **部署**：`Docker` & `Docker Compose`；生产推荐 `Nginx` 反向代理；引入 `Redis` 服务用于异步队列。
+      * **LaTeX→PDF**：`PyTinyTeX` 自带 XeLaTeX 引擎；后端将代码/章节渲染为 LaTeX 源文件再编译，预安装 `xeCJK / fvextra / multicol / titlesec` 等宏包，使用系统/容器内置的思源黑体或 PingFang 等 CJK 字体。
+      * 当本地未安装 LaTeX 且未启用 PyTinyTeX 时，可设置环境变量 `CODEWRIGHT_ALLOW_IMAGE_PDF_FALLBACK=1`，临时使用图片型 PDF 作为兜底（仅推荐测试环境）。
+  * **部署**：`Docker` & `Docker Compose`、`Nginx` 反向代理、外部队列服务均归入后续部署阶段，本地版本不依赖系统级服务。
 
 -----
 
@@ -94,7 +95,7 @@ CodeWright（代码版权工匠）是一个面向中国大陆用户、仅提供�
 采用经典的前后端分离架构。
 
   * **前端 (Vue3)**：负责所有用户界面的渲染和交互逻辑。通过HTTP请求与后端API进行数据交换。
-  * **后端 (FastAPI)**：无状态的 API 服务。负责业务逻辑、用户认证、数据库操作、文件存储、异步导出队列（基于 Redis 的 RQ/Celery），以及调用 PDF 生成库创建最终文档。
+  * **后端 (FastAPI)**：无状态的 API 服务。负责业务逻辑、用户认证、数据库操作、文件存储、数据库持久化导出任务，以及调用 PDF 生成库创建最终文档。
   * **Nginx (反向代理)**：可选，但在生产环境中推荐。用于代理前端静态文件和后端API请求，便于配置HTTPS和负载均衡。
 
 **高层架构图 (概念描述):**
@@ -269,7 +270,7 @@ CodeWright（代码版权工匠）是一个面向中国大陆用户、仅提供�
 #### **8. 部署与运维建议**
 
 1.  **Docker 化**：前端、后端分别编写 `Dockerfile`；镜像内置中文字体（思源黑体/宋体）与 WeasyPrint 依赖。
-2.  **Docker Compose**：统一编排前端、后端、Redis、Nginx；暴露 API 与前端静态站点；为 Redis 设置持久化卷。
+2.  **Docker Compose**：统一编排前端、后端、可选外部队列、Nginx；暴露 API 与前端静态站点；该项暂不实施。
 3.  **数据持久化**：将 SQLite 数据库文件与 `upload/`、`templates/`、`exports/` 目录通过 `volumes` 挂载，避免数据丢失。
 4.  **环境变量**：`JWT_SECRET`、`TOKEN_EXPIRE_MINUTES`、`MAX_UPLOAD_SIZE_MB`、`ALLOWED_EXTENSIONS`、`PDF_DEFAULT_FONT_FAMILY` 等。
 5.  **备份策略**：每日自动备份数据库与上传/模板/导出目录；保留最近 7 天快照。
@@ -294,13 +295,13 @@ CodeWright（代码版权工匠）是一个面向中国大陆用户、仅提供�
   1) 不构建 Docker 容器化部署，采用本地开发环境以降低复杂度（FastAPI 本地运行 + 前端本地 Vite 开发服务器）。
   2) 不部署在线演示环境，聚焦核心功能开发与本地验证。
   3) 采用极简设计语言与基础组件用法，避免深度 UI 设计/定制化工作量。
-  4) 不对外暴露网络端口，所有测试在本地 Python 环境完成（含导出队列本地 Redis 实例）。
+  4) 不对外暴露网络端口，所有测试在本地 Python 环境完成；导出队列使用本地数据库任务表与后台任务实现。
   5) 优先级：认证 → 项目/上传 → 预览 → 异步导出队列（提交/查询/下载）→ 模板基础 → 管理基础（公告/映射/设置）。
 
 - `V 1.0.0` 阶段重点：
   - 基础功能闭环：用户注册登录、项目创建与管理、文件上传与排序、HTML 预览、异步导出 PDF（含进度查询与下载）、基础模板与公告、系统设置（中文字体/高亮映射）。
   - 基线性能：2000 行导出 < 10s（在本地环境）；文件与类型限制生效；Markdown/HTML 清洗安全链路打通。
-  - 文档：完善开发指南、API 约定与验收用例，建立最小可行测试集（pytest/vitest/Playwright）。
+  - 文档：完善开发指南、API 约定与验收用例，建立最小可行后端 pytest 测试集；Vitest/Playwright 按当前范围暂不实施。
 
 - 到 `V 2.0.0` 前的功能优先级策略：
   1) 持续改进稳定性与功能性（导出鲁棒性、错误恢复、队列可观测性）。
@@ -331,18 +332,21 @@ CodeWright（代码版权工匠）是一个面向中国大陆用户、仅提供�
 - 分支策略：main（稳定）、feature/feat-xxx、fix/bug-xxx、chore/xxx。
 - 提交规范：Conventional Commits（feat/fix/docs/style/refactor/test/chore）。
 - 代码规范：
-  - 前端：TypeScript、ESLint + Prettier、严格类型；Vitest 单测。
+  - 前端：TypeScript、ESLint + Prettier、严格类型；Vitest 单测按当前范围暂不实施。
   - 后端：Black + isort + Ruff；pytest；可选 mypy。
 - 测试：
-  - 单元（前端/后端）、接口（pytest+httpx）、端到端（Playwright：注册/登录、上传、排序、预览、导出）。
-- CI（可选后续接入）：lint → test → build → 镜像 → 扫描 → 部署。
+  - 已建立后端接口 pytest；前端 Vitest 与 Playwright 端到端按当前范围暂不实施。
+- CI（按当前范围暂不实施）：lint → test → build → 镜像 → 扫描 → 部署。
 
 #### **13. PDF 渲染与安全管线**
 
 - 前端预览：markdown-it 解析 → DOMPurify 清洗 → highlight.js 仅用于浏览器侧高亮。
-- 后端导出：Pygments（代码→HTML，行号/连续编号可选）→ WeasyPrint（HTML+CSS→PDF，中文字体内置）。
+- 后端导出：Pygments（代码→HTML，行号/连续编号可选）→ LaTeX（XeLaTeX via PyTinyTeX）。
+  - 通用导言：`fontspec / xeCJK / fvextra / multicol / titlesec / hyperref` 等。
+  - 字体：通过 `fontspec` 检测 `PingFang SC / Songti SC / Heiti SC / Noto Sans CJK SC` 等候选 CJK 字体，等宽字体优先 `Menlo / Monaco / Consolas`。
+  - 错误处理：每次任务在 `runtime/exports/logs/<job_id>.log` 留档，前端可下载排查。
 - 安全：上传白名单（.py .java .js .ts .md .png .jpg .jpeg .gif .txt .c .cpp）；大小限制；拒绝可执行二进制；清洗 Markdown/HTML 防 XSS。
-- 性能：目标 2000 行 < 10s；图片导出按页宽压缩；异步队列可横向扩展。
+- 性能：目标 2000 行 < 10s；图片导出按页宽压缩到 1600px；异步队列可横向扩展。
 
 #### **14. 错误码与响应约定**
 
@@ -354,7 +358,7 @@ CodeWright（代码版权工匠）是一个面向中国大陆用户、仅提供�
 
 - 代码构建导出：顺序正确；连续行号选项生效；中文字体渲染正确；2000 行在 10s 内；下载文件可复核。
 - 手册构建导出：目录层级正确；章节图文匹配；Markdown 标题与段落渲染正确；样式与全局设置一致。
-- 管理：首个注册用户自动为管理员且不可删除；模板发布后不可直接覆盖（需新版本）。
+- 管理：系统无管理员时自动创建默认管理员 `admin/admin123`，管理员账号不可禁用；模板发布后不可直接覆盖（需新版本）。
 
 #### **16. 技术问题解决记录**
 

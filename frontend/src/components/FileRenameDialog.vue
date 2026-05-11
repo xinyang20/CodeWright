@@ -138,8 +138,8 @@ defineExpose({
 
 <style scoped>
 .disabled-input :deep(.el-input__inner) {
-  background-color: #f5f7fa;
-  color: #909399;
+  background-color: #f2f6fb;
+  color: var(--cw-text-subtle);
 }
 
 .form-tip {

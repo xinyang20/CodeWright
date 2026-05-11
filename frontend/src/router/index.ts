@@ -61,30 +61,33 @@ const router = createRouter({
 })
 
 // 路由守卫
-router.beforeEach((to, from, next) => {
+router.beforeEach(async (to) => {
   const authStore = useAuthStore()
-  
-  // 检查是否需要认证
+
+  if (authStore.isAuthenticated && !authStore.user) {
+    try {
+      await authStore.getCurrentUser()
+    } catch (error) {
+      console.error('恢复登录态失败，清理 token:', error)
+      authStore.logout()
+      if (to.meta.requiresAuth) {
+        return { name: 'login', query: { redirect: to.fullPath } }
+      }
+    }
+  }
+
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
-    next({ name: 'login', query: { redirect: to.fullPath } })
-    return
+    return { name: 'login', query: { redirect: to.fullPath } }
   }
-  
-  // 检查是否需要管理员权限
-  if (to.meta.requiresAdmin && authStore.user?.role !== 'admin') {
-    // ElMessage.error('权限不足')
+
+  if (to.meta.requiresAdmin && !authStore.isAdmin) {
     console.error('权限不足')
-    next({ name: 'dashboard' })
-    return
+    return { name: 'dashboard' }
   }
-  
-  // 已登录用户访问登录/注册页面，重定向到仪表板
+
   if ((to.name === 'login' || to.name === 'register') && authStore.isAuthenticated) {
-    next({ name: 'dashboard' })
-    return
+    return { name: 'dashboard' }
   }
-  
-  next()
 })
 
 export default router

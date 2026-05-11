@@ -34,7 +34,6 @@
             placeholder="请确认密码"
             class="form-input"
             required
-            @keyup.enter="handleSubmit"
           />
         </div>
 
@@ -75,6 +74,10 @@ const form = reactive({
 })
 
 const handleSubmit = async () => {
+  if (authStore.loading) {
+    return
+  }
+
   if (!form.username || !form.password || !form.confirmPassword) {
     alert('请填写所有字段')
     return
@@ -102,14 +105,15 @@ const handleSubmit = async () => {
     }
 
     await authStore.register(registerData)
-
-    // 注册成功后跳转到登录页
-    alert('注册成功，请登录')
-    router.push('/login')
   } catch (error) {
     console.error('注册失败:', error)
     alert('注册失败，请重试')
+    return
   }
+
+  // 注册成功后跳转到登录页；跳转错误不应被当作注册失败处理
+  alert('注册成功，请登录')
+  router.push('/login')
 }
 </script>
 
@@ -119,15 +123,17 @@ const handleSubmit = async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 24px;
+  background: var(--cw-bg);
 }
 
 .register-container {
-  width: 400px;
-  padding: 40px;
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  width: min(100%, 420px);
+  padding: 34px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--cw-border);
+  border-radius: 22px;
+  box-shadow: var(--cw-shadow-md);
 }
 
 .register-header {
@@ -136,14 +142,15 @@ const handleSubmit = async () => {
 }
 
 .register-header h1 {
-  color: #2f54eb;
-  font-size: 28px;
+  color: var(--cw-text);
+  font-size: 30px;
+  letter-spacing: -0.05em;
   margin-bottom: 8px;
 }
 
 .register-header p {
-  color: #666;
-  font-size: 16px;
+  color: var(--cw-text-muted);
+  font-size: 15px;
 }
 
 .register-form {
@@ -156,54 +163,8 @@ const handleSubmit = async () => {
 
 .form-input {
   width: 100%;
-  padding: 12px 16px;
-  border: 1px solid #d9d9d9;
-  border-radius: 6px;
-  font-size: 16px;
-  transition: border-color 0.3s;
-  box-sizing: border-box;
-}
-
-.form-input:focus {
-  outline: none;
-  border-color: #2f54eb;
-}
-
-.btn {
-  padding: 8px 16px;
-  border: 1px solid #d9d9d9;
-  border-radius: 6px;
-  background: #fff;
-  color: #333;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s;
-}
-
-.btn:hover {
-  border-color: #2f54eb;
-  color: #2f54eb;
-}
-
-.btn-primary {
-  background: #2f54eb;
-  color: #fff;
-  border-color: #2f54eb;
-}
-
-.btn-primary:hover {
-  background: #1d39c4;
-  border-color: #1d39c4;
-}
-
-.btn-large {
-  padding: 12px 24px;
-  font-size: 16px;
-}
-
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+  min-height: 44px;
+  font-size: 15px;
 }
 
 .register-button {
@@ -215,8 +176,9 @@ const handleSubmit = async () => {
 }
 
 .link {
-  color: #2f54eb;
+  color: var(--cw-blue-600);
   text-decoration: none;
+  font-weight: 650;
 }
 
 .link:hover {

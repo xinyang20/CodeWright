@@ -1,99 +1,82 @@
 <template>
   <el-dialog
     v-model="visible"
-    title="HTML 预览"
+    title="PDF 预览"
     width="95%"
     :before-close="handleClose"
     class="html-preview-dialog"
   >
-    <div class="html-preview" v-loading="loading">
-      <!-- 工具栏 -->
+    <div class="pdf-preview">
       <div class="toolbar">
         <div class="toolbar-left">
-          <el-button-group>
-            <el-button 
-              :type="viewMode === 'preview' ? 'primary' : ''"
-              size="small"
-              @click="viewMode = 'preview'"
-            >
-              <el-icon><View /></el-icon>
-              预览
-            </el-button>
-            <el-button 
-              :type="viewMode === 'source' ? 'primary' : ''"
-              size="small"
-              @click="viewMode = 'source'"
-            >
-              <el-icon><Document /></el-icon>
-              源码
-            </el-button>
-            <el-button 
-              :type="viewMode === 'split' ? 'primary' : ''"
-              size="small"
-              @click="viewMode = 'split'"
-            >
-              <el-icon><Grid /></el-icon>
-              分屏
-            </el-button>
-          </el-button-group>
+          <el-radio-group v-model="previewMode" size="small" @change="handleModeChange">
+            <el-radio-button value="pdf">PDF</el-radio-button>
+            <el-radio-button value="html">HTML</el-radio-button>
+          </el-radio-group>
+          <span class="toolbar-label">{{ modeHint }}</span>
         </div>
-        
+
         <div class="toolbar-center">
           <span class="project-title">{{ project?.project_name }}</span>
         </div>
-        
+
         <div class="toolbar-right">
-          <el-button type="text" size="small" @click="refreshPreview">
+          <el-button type="text" size="small" :disabled="loading" @click="refreshPreview">
             <el-icon><Refresh /></el-icon>
             刷新
           </el-button>
-          <el-button type="text" size="small" @click="exportPdf">
+          <el-button
+            type="text"
+            size="small"
+            :loading="exporting"
+            :disabled="loading || exporting"
+            @click="exportPdf"
+          >
             <el-icon><Download /></el-icon>
-            导出 PDF
+            下载 PDF
           </el-button>
         </div>
       </div>
 
-      <!-- 内容区域 -->
-      <div class="content-area">
-        <!-- 预览模式 -->
-        <div v-if="viewMode === 'preview'" class="preview-only">
-          <iframe 
-            ref="previewFrame"
-            class="preview-iframe"
-            :srcdoc="htmlContent"
-            @load="handleIframeLoad"
-          ></iframe>
+      <div ref="contentArea" class="content-area">
+        <!-- PDF mode: hand the blob URL to the browser's native PDF viewer.
+             This avoids the 9.6 MB pdfjs-dist worker bundle entirely. -->
+        <iframe
+          v-show="previewMode === 'pdf' && pdfBlobUrl"
+          class="pdf-frame"
+          :src="pdfBlobUrl || ''"
+          :title="`${project?.project_name || ''} PDF 预览`"
+        />
+
+        <!-- HTML mode: show iframe whenever we have srcdoc, regardless of loading. -->
+        <iframe
+          v-if="previewMode === 'html' && htmlSrcdoc"
+          class="html-frame"
+          sandbox="allow-same-origin"
+          :srcdoc="htmlSrcdoc"
+        />
+
+        <!-- Empty state: only when truly idle. -->
+        <div
+          v-if="!loading && !hasContent && loadingPhase === 'idle'"
+          class="preview-empty"
+        >
+          {{ previewMode === 'pdf' ? 'PDF 预览尚未生成，点击"刷新"重新尝试' : 'HTML 预览尚未生成，点击"刷新"重新尝试' }}
         </div>
 
-        <!-- 源码模式 -->
-        <div v-else-if="viewMode === 'source'" class="source-only">
-          <div class="source-container">
-            <pre><code v-html="highlightedHtml"></code></pre>
-          </div>
-        </div>
-
-        <!-- 分屏模式 -->
-        <div v-else class="split-view">
-          <div class="split-left">
-            <div class="panel-header">源码</div>
-            <div class="source-container">
-              <pre><code v-html="highlightedHtml"></code></pre>
-            </div>
-          </div>
-          <div class="split-divider"></div>
-          <div class="split-right">
-            <div class="panel-header">预览</div>
-            <iframe 
-              ref="previewFrameSplit"
-              class="preview-iframe"
-              :srcdoc="htmlContent"
-            ></iframe>
+        <!-- Centered loading overlay covering compile + parse phases. -->
+        <div v-if="loading" class="preview-loading-overlay" role="status" aria-live="polite">
+          <div class="preview-loading-card">
+            <el-icon class="preview-loading-spinner is-loading">
+              <Loading />
+            </el-icon>
+            <p class="preview-loading-title">{{ loadingTitle }}</p>
+            <p class="preview-loading-hint">{{ loadingHint }}</p>
           </div>
         </div>
       </div>
     </div>
-    
+
     <template #footer>
       <div class="dialog-footer">
         <el-button @click="handleClose">关闭</el-button>
@@ -103,424 +86,427 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { 
-  View, 
-  Document, 
-  Grid, 
-  Refresh, 
-  Download 
-} from '@element-plus/icons-vue'
-import hljs from 'highlight.js'
-import 'highlight.js/styles/default.css'
-import type { Project, ProjectFile } from '@/types'
-import { projectApi, fileApi } from '@/utils/api'
+import { Refresh, Download, Loading } from '@element-plus/icons-vue'
+import type { Project } from '@/types'
+import { projectApi } from '@/utils/api'
 
-// Props
 interface Props {
   modelValue: boolean
   project: Project | null
+  exportOptions?: Record<string, any>
 }
 
 const props = defineProps<Props>()
 
-// Emits
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
 }>()
 
-// 响应式数据
+type PreviewMode = 'pdf' | 'html'
+
+type LoadingPhase = 'idle' | 'compiling'
+
 const visible = ref(false)
 const loading = ref(false)
-const viewMode = ref<'preview' | 'source' | 'split'>('preview')
-const htmlContent = ref('')
-const sourceCode = ref('')
-const previewFrame = ref<HTMLIFrameElement>()
-const previewFrameSplit = ref<HTMLIFrameElement>()
+const loadingPhase = ref<LoadingPhase>('idle')
+const loadingElapsed = ref(0)
+const exporting = ref(false)
+const contentArea = ref<HTMLElement>()
+const previewMode = ref<PreviewMode>('pdf')
+const htmlSrcdoc = ref<string>('')
+const pdfBlobUrl = ref<string>('')
+let renderToken = 0
+let loadingTimer: ReturnType<typeof setInterval> | null = null
 
-// 计算属性
-const highlightedHtml = computed(() => {
-  if (!sourceCode.value) return ''
-  return hljs.highlight(sourceCode.value, { language: 'html' }).value
+const modeHint = computed(() => {
+  return previewMode.value === 'pdf'
+    ? '预览与导出使用同一套 LaTeX PDF 生成链路'
+    : 'HTML 预览来自服务端模板渲染，便于排查样式与变量替换'
 })
 
-// 监听 modelValue 变化
+const hasContent = computed(() => {
+  return previewMode.value === 'pdf'
+    ? Boolean(pdfBlobUrl.value)
+    : Boolean(htmlSrcdoc.value)
+})
+
+const loadingTitle = computed(() => {
+  const verb = previewMode.value === 'pdf' ? '正在生成 PDF 预览' : '正在生成 HTML 预览'
+  const elapsed = loadingElapsed.value
+  if (elapsed === 0) {
+    return `${verb}，请稍候…`
+  }
+  return `${verb}，已耗时 ${elapsed}s`
+})
+
+const loadingHint = computed(() => {
+  const elapsed = loadingElapsed.value
+  if (previewMode.value !== 'pdf') {
+    return '后端正在渲染模板，请稍候。'
+  }
+  if (elapsed < 8) {
+    return '后端正在用 xelatex 编译，第一次约 5–15 秒。关闭"目录"可减半。'
+  }
+  if (elapsed < 30) {
+    return '正在调用 xelatex 编译，请耐心等待。'
+  }
+  return '项目较大或文件较多，xelatex 编译可能持续数十秒。'
+})
+
+const startLoadingTimer = () => {
+  stopLoadingTimer()
+  loadingElapsed.value = 0
+  loadingTimer = setInterval(() => {
+    loadingElapsed.value += 1
+  }, 1000)
+}
+
+const stopLoadingTimer = () => {
+  if (loadingTimer) {
+    clearInterval(loadingTimer)
+    loadingTimer = null
+  }
+}
+
+let pendingPreviewTimer: ReturnType<typeof setTimeout> | null = null
+
+const schedulePreview = (delayMs = 80) => {
+  if (!visible.value || !props.project) return
+  if (pendingPreviewTimer) {
+    clearTimeout(pendingPreviewTimer)
+  }
+  pendingPreviewTimer = setTimeout(() => {
+    pendingPreviewTimer = null
+    generatePreview()
+  }, delayMs)
+}
+
 watch(() => props.modelValue, (newValue) => {
   visible.value = newValue
   if (newValue && props.project) {
-    generatePreview()
+    // Set loading immediately so the dialog body shows the spinner the moment it mounts.
+    loading.value = true
+    startLoadingTimer()
+    // Tiny delay coalesces the immediate dialog-open watcher with any synchronous
+    // option-change watchers that fire in the same tick.
+    schedulePreview(0)
   }
+}, { immediate: true })
+
+watch(() => props.project?.id, () => {
+  schedulePreview(0)
 })
 
-// 监听 visible 变化
+watch(() => props.exportOptions, () => {
+  schedulePreview(150)
+}, { deep: true })
+
 watch(visible, (newValue) => {
   emit('update:modelValue', newValue)
   if (!newValue) {
-    // 清理数据
-    htmlContent.value = ''
-    sourceCode.value = ''
+    clearPreview()
   }
 })
 
-// 生成HTML预览
+const currentOptions = () => props.exportOptions || {}
+
+const clearPreview = () => {
+  renderToken += 1
+  loading.value = false
+  loadingPhase.value = 'idle'
+  stopLoadingTimer()
+  if (pendingPreviewTimer) {
+    clearTimeout(pendingPreviewTimer)
+    pendingPreviewTimer = null
+  }
+  htmlSrcdoc.value = ''
+  if (pdfBlobUrl.value) {
+    URL.revokeObjectURL(pdfBlobUrl.value)
+    pdfBlobUrl.value = ''
+  }
+}
+
+const handleModeChange = () => {
+  if (visible.value && props.project) {
+    generatePreview()
+  }
+}
+
 const generatePreview = async () => {
   if (!props.project) return
 
+  const token = renderToken + 1
+  renderToken = token
+  const projectId = props.project.id
+  const mode = previewMode.value
+
   try {
     loading.value = true
-    
-    // 获取项目文件列表
-    const filesResponse = await fileApi.getProjectFiles(props.project.id)
-    if (filesResponse.code !== 0) {
-      throw new Error(filesResponse.message || '获取项目文件失败')
-    }
-    
-    const files = filesResponse.data.files
-    if (files.length === 0) {
-      ElMessage.warning('项目中没有文件')
-      return
-    }
-    
-    // 生成HTML内容
-    const html = await buildHtmlContent(files)
-    htmlContent.value = html
-    sourceCode.value = html
-    
-  } catch (error) {
-    console.error('生成预览失败:', error)
-    ElMessage.error('生成预览失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-// 构建HTML内容
-const buildHtmlContent = async (files: ProjectFile[]) => {
-  const sortedFiles = files
-    .filter(f => f.include_in_export)
-    .sort((a, b) => a.order_index - b.order_index)
-  
-  let htmlParts = []
-  
-  // HTML头部
-  htmlParts.push(`<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${props.project?.project_name || '代码文档'}</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #fff;
-        }
-        .header {
-            text-align: center;
-            margin-bottom: 40px;
-            padding-bottom: 20px;
-            border-bottom: 2px solid #5c7cfa;
-        }
-        .header h1 {
-            color: #5c7cfa;
-            margin: 0;
-            font-size: 2.5em;
-        }
-        .toc {
-            background-color: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 30px;
-        }
-        .toc h2 {
-            margin-top: 0;
-            color: #5c7cfa;
-        }
-        .toc ul {
-            list-style: none;
-            padding: 0;
-        }
-        .toc li {
-            margin: 8px 0;
-        }
-        .toc a {
-            color: #5c7cfa;
-            text-decoration: none;
-            padding: 4px 8px;
-            border-radius: 4px;
-            transition: background-color 0.3s;
-        }
-        .toc a:hover {
-            background-color: #e3f2fd;
-        }
-        .file-section {
-            margin-bottom: 40px;
-            border: 1px solid #e4e7ed;
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        .file-header {
-            background-color: #5c7cfa;
-            color: white;
-            padding: 12px 20px;
-            font-weight: 600;
-        }
-        .file-content {
-            background-color: #f8f9fa;
-        }
-        .file-content pre {
-            margin: 0;
-            padding: 20px;
-            overflow-x: auto;
-            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-            font-size: 13px;
-            line-height: 1.5;
-        }
-        .highlight {
-            background-color: transparent;
-        }
-        .linenos {
-            color: #666;
-            background-color: #f0f0f0;
-            padding-right: 8px;
-            border-right: 1px solid #ddd;
-            user-select: none;
-        }
-    </style>
-</head>
-<body>`)
-
-  // 页面头部
-  htmlParts.push(`
-    <div class="header">
-        <h1>${props.project?.project_name || '代码文档'}</h1>
-        <p>生成时间：${new Date().toLocaleString('zh-CN')}</p>
-    </div>`)
-
-  // 目录
-  if (sortedFiles.length > 1) {
-    htmlParts.push(`
-    <div class="toc">
-        <h2>目录</h2>
-        <ul>`)
-    
-    sortedFiles.forEach((file, index) => {
-      const fileName = file.display_name || file.original_filename
-      htmlParts.push(`            <li><a href="#file-${index}">${fileName}</a></li>`)
-    })
-    
-    htmlParts.push(`        </ul>
-    </div>`)
-  }
-
-  // 文件内容
-  for (let i = 0; i < sortedFiles.length; i++) {
-    const file = sortedFiles[i]
-    const fileName = file.display_name || file.original_filename
-    
-    try {
-      // 获取文件预览
-      const previewResponse = await fileApi.previewFile(
-        file.file_id, 
-        file.language_override
-      )
-      
-      if (previewResponse.code === 0) {
-        const previewData = previewResponse.data
-        
-        htmlParts.push(`
-    <div class="file-section" id="file-${i}">
-        <div class="file-header">
-            ${fileName}
-        </div>
-        <div class="file-content">
-            ${previewData.highlighted_html || `<pre><code>${previewData.content}</code></pre>`}
-        </div>
-    </div>`)
+    loadingPhase.value = 'compiling'
+    startLoadingTimer()
+    if (mode === 'pdf') {
+      htmlSrcdoc.value = ''
+      const pdf = await projectApi.previewProjectPdf(projectId, currentOptions())
+      if (renderToken !== token) return
+      // Replace any previous blob URL before installing the new one so the
+      // browser doesn't keep two PDFs around.
+      const previousUrl = pdfBlobUrl.value
+      pdfBlobUrl.value = URL.createObjectURL(pdf)
+      if (previousUrl) {
+        URL.revokeObjectURL(previousUrl)
       }
-    } catch (error) {
-      console.error(`获取文件 ${fileName} 预览失败:`, error)
-      htmlParts.push(`
-    <div class="file-section" id="file-${i}">
-        <div class="file-header">
-            ${fileName}
-        </div>
-        <div class="file-content">
-            <pre><code>无法加载文件内容</code></pre>
-        </div>
-    </div>`)
+    } else {
+      const html = await projectApi.previewProjectHtml(projectId, currentOptions())
+      if (renderToken !== token) return
+      htmlSrcdoc.value = html
+    }
+  } catch (error) {
+    if (renderToken !== token) return
+    console.error('生成预览失败:', error)
+    ElMessage.error(error instanceof Error ? error.message : '预览失败')
+    clearPreview()
+  } finally {
+    if (renderToken === token) {
+      loading.value = false
+      loadingPhase.value = 'idle'
+      stopLoadingTimer()
     }
   }
-
-  // HTML尾部
-  htmlParts.push(`
-</body>
-</html>`)
-
-  return htmlParts.join('')
 }
 
-// 刷新预览
 const refreshPreview = () => {
   generatePreview()
 }
 
-// 导出PDF
 const exportPdf = async () => {
   if (!props.project) return
 
   try {
+    exporting.value = true
     ElMessage.info('正在生成PDF，请稍候...')
-
-    // 使用默认导出选项
-    const exportOptions = {
-      include_toc: true,
-      include_summary: true,
-      watermark: false
-    }
-
-    const response = await projectApi.exportProjectPdf(props.project.id, exportOptions)
-
-    // 创建下载链接
-    const blob = new Blob([response], { type: 'application/pdf' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${props.project.project_name}.pdf`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
-
+    const blob = await projectApi.exportProjectPdf(props.project.id, currentOptions())
+    downloadPdfBlob(blob, `${props.project.project_name}.pdf`)
     ElMessage.success('PDF导出成功')
   } catch (error) {
     console.error('导出PDF失败:', error)
-    ElMessage.error('导出PDF失败')
+    ElMessage.error(error instanceof Error ? error.message : '导出PDF失败')
+  } finally {
+    exporting.value = false
   }
 }
 
-// 处理iframe加载
-const handleIframeLoad = () => {
-  // iframe加载完成后的处理
+const downloadPdfBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
 }
 
-// 处理关闭
 const handleClose = () => {
   visible.value = false
 }
 
-// 暴露方法给父组件
 defineExpose({
   close: handleClose,
   refresh: refreshPreview
 })
+
+onBeforeUnmount(() => {
+  clearPreview()
+})
 </script>
 
 <style scoped>
-.html-preview-dialog :deep(.el-dialog) {
-  margin-top: 2vh;
-  margin-bottom: 2vh;
-  height: 96vh;
+:global(.html-preview-dialog.el-dialog),
+:global(.html-preview-dialog .el-dialog) {
+  width: 94vw !important;
+  max-width: 94vw;
+  margin-top: 3vh;
+  margin-bottom: 3vh;
+  height: 94vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+:global(.html-preview-dialog .el-dialog__header),
+:global(.html-preview-dialog .el-dialog__footer) {
+  flex: 0 0 auto;
+}
+
+:global(.html-preview-dialog .el-dialog__body) {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
-.html-preview-dialog :deep(.el-dialog__body) {
-  flex: 1;
+:global(.html-preview-dialog .el-dialog__footer) {
   padding: 0;
-  overflow: hidden;
 }
 
-.html-preview {
+.pdf-preview,
+:global(.html-preview-dialog .pdf-preview) {
   height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
 .toolbar {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
+  gap: 16px;
   padding: 12px 16px;
-  border-bottom: 1px solid #e4e7ed;
-  background-color: #f8f9fa;
+  border-bottom: 1px solid var(--cw-border);
+  background-color: var(--cw-surface-soft);
+}
+
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.toolbar-right {
+  justify-content: flex-end;
+}
+
+.mode-badge {
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--cw-blue-50);
+  color: var(--cw-blue-700);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.toolbar-label {
+  color: var(--cw-text-muted);
+  font-size: 13px;
 }
 
 .project-title {
   font-weight: 600;
-  color: #111;
+  color: var(--cw-text);
 }
 
 .content-area {
+  position: relative;
   flex: 1;
-  overflow: hidden;
+  min-height: 0;
+  overflow: auto;
+  background: #e9eef5;
 }
 
-.preview-only,
-.source-only {
-  height: 100%;
-}
-
-.preview-iframe {
+.pdf-frame {
   width: 100%;
   height: 100%;
-  border: none;
-  background-color: #fff;
+  min-height: 70vh;
+  border: 0;
+  background: #fff;
 }
 
-.source-container {
+.preview-empty {
   height: 100%;
-  overflow: auto;
-  background-color: #f8f9fa;
-}
-
-.source-container pre {
-  margin: 0;
-  padding: 16px;
-  height: 100%;
-  overflow: auto;
-}
-
-.split-view {
   display: flex;
-  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: var(--cw-text-muted);
+  font-size: 14px;
 }
 
-.split-left,
-.split-right {
-  flex: 1;
+.preview-loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(248, 250, 252, 0.92);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.preview-loading-card {
   display: flex;
   flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 36px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 10px 32px rgba(16, 32, 51, 0.12);
+  pointer-events: auto;
+  max-width: 420px;
+  text-align: center;
 }
 
-.split-divider {
-  width: 4px;
-  background-color: #e4e7ed;
-  cursor: col-resize;
+.preview-loading-spinner {
+  font-size: 36px;
+  color: var(--cw-blue-600, #147ED6);
 }
 
-.panel-header {
-  padding: 8px 12px;
-  background-color: #f0f0f0;
-  border-bottom: 1px solid #e4e7ed;
-  font-size: 12px;
+.preview-loading-spinner.is-loading {
+  animation: preview-loading-rotate 1s linear infinite;
+}
+
+.preview-loading-title {
+  margin: 0;
   font-weight: 600;
-  color: #666;
+  font-size: 14px;
+  color: var(--cw-text, #102033);
 }
 
-.split-left .source-container,
-.split-right .preview-iframe {
-  flex: 1;
+.preview-loading-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--cw-text-muted, #667587);
+  line-height: 1.5;
+}
+
+@keyframes preview-loading-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.html-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 60vh;
+  border: 0;
+  background: #fff;
 }
 
 .dialog-footer {
   text-align: right;
-  padding: 12px 16px;
-  border-top: 1px solid #e4e7ed;
+  padding: 10px 16px;
+  border-top: 1px solid var(--cw-border);
+}
+
+@media (max-width: 720px) {
+  .toolbar {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .toolbar-center {
+    order: -1;
+  }
+
+  .toolbar-right {
+    justify-content: flex-start;
+  }
 }
 </style>

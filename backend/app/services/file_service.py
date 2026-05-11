@@ -3,19 +3,59 @@
 """
 import os
 import uuid
-import shutil
+import json
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Any
 from sqlalchemy.orm import Session
 from fastapi import UploadFile
 
 from app.models.file import UploadedFile
+from app.models.setting import Setting
+from app.paths import UPLOAD_DIR
+
+DEFAULT_ALLOWED_EXTENSIONS = {
+    ".py", ".java", ".js", ".ts", ".md", ".txt", ".c", ".cpp", ".h", ".hpp",
+    ".css", ".html", ".xml", ".json", ".yml", ".yaml", ".sql", ".sh", ".bat",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
+}
+DEFAULT_MAX_UPLOAD_SIZE_MB = 10
+DEFAULT_MAX_PROJECT_SIZE_MB = 100
 
 class FileService:
     def __init__(self, db: Session):
         self.db = db
-        self.upload_dir = Path("../upload")
+        self.upload_dir = UPLOAD_DIR
         self.upload_dir.mkdir(exist_ok=True)
+
+    def get_upload_policy(self) -> dict[str, Any]:
+        """读取上传策略，未初始化设置时使用安全默认值。"""
+        setting = self.db.query(Setting).filter(Setting.key == "upload").first()
+        value: dict[str, Any] = {}
+        if setting:
+            try:
+                value = json.loads(setting.value)
+            except json.JSONDecodeError:
+                value = {}
+
+        allowed_extensions = value.get("allowed_extensions") or DEFAULT_ALLOWED_EXTENSIONS
+        return {
+            "allowed_extensions": {str(ext).lower() for ext in allowed_extensions},
+            "max_upload_size_bytes": int(value.get("max_upload_size_mb", DEFAULT_MAX_UPLOAD_SIZE_MB)) * 1024 * 1024,
+            "max_project_size_bytes": int(value.get("max_project_size_mb", DEFAULT_MAX_PROJECT_SIZE_MB)) * 1024 * 1024,
+        }
+
+    def validate_upload(self, filename: str, file_size: int) -> tuple[bool, str]:
+        """校验文件后缀与大小。"""
+        policy = self.get_upload_policy()
+        file_ext = Path(filename).suffix.lower()
+        if file_ext not in policy["allowed_extensions"]:
+            return False, f"不支持的文件类型: {file_ext or '无后缀'}"
+
+        if file_size > policy["max_upload_size_bytes"]:
+            max_mb = policy["max_upload_size_bytes"] // 1024 // 1024
+            return False, f"文件大小超过限制 ({max_mb}MB)"
+
+        return True, ""
     
     async def save_uploaded_file(
         self, 
@@ -25,7 +65,8 @@ class FileService:
     ) -> UploadedFile:
         """保存上传的文件"""
         # 生成唯一文件名
-        file_ext = Path(file.filename).suffix
+        original_filename = file.filename or "unnamed"
+        file_ext = Path(original_filename).suffix
         unique_filename = f"{uuid.uuid4()}{file_ext}"
         storage_path = self.upload_dir / unique_filename
         
@@ -35,7 +76,7 @@ class FileService:
         
         # 保存文件信息到数据库
         uploaded_file = UploadedFile(
-            original_filename=file.filename,
+            original_filename=original_filename,
             storage_path=str(storage_path),
             file_size=len(file_content),
             file_type=file.content_type or "application/octet-stream",

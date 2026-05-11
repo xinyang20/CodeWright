@@ -55,6 +55,9 @@ class AdminService:
         user = self.db.query(User).filter(User.id == user_id).first()
         if not user:
             return False
+
+        if user.role == "admin" and not is_active:
+            return False
         
         user.is_active = is_active
         self.db.commit()

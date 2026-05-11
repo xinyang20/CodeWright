@@ -2,13 +2,16 @@
 项目服务
 """
 import json
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 
 from app.models.project import Project, ProjectItem
 from app.models.file import UploadedFile
-from app.schemas.project import ProjectCreate, ProjectUpdate
+from app.models.manual_section import ManualSection
+from app.schemas.project import ProjectCreate, ProjectUpdate, ManualSectionCreate, ManualSectionUpdate
+from app.services.file_service import FileService
 
 class ProjectService:
     def __init__(self, db: Session):
@@ -21,9 +24,9 @@ class ProjectService:
         # 准备配置数据
         config = {}
         if project_data.code_options:
-            config['code_options'] = project_data.code_options.dict()
+            config['code_options'] = project_data.code_options.model_dump()
         if project_data.manual_options:
-            config['manual_options'] = project_data.manual_options.dict()
+            config['manual_options'] = project_data.manual_options.model_dump()
 
         new_project = Project(
             project_name=project_data.project_name,
@@ -35,29 +38,69 @@ class ProjectService:
         self.db.add(new_project)
         self.db.commit()
         self.db.refresh(new_project)
+
+        if new_project.project_type == "manual" and project_data.manual_options:
+            await self._create_default_manual_sections(
+                new_project.id,
+                project_data.manual_options.default_sections
+            )
         
         return new_project
+
+    async def _create_default_manual_sections(self, project_id: int, section_keys: list[str]) -> None:
+        """根据创建配置生成操作文档默认章节。"""
+        section_templates = {
+            "overview": ("软件概述", "介绍 {{软件名称}} 的用途、目标用户和主要能力。"),
+            "installation": ("安装说明", "说明 {{软件名称}} 的安装环境、安装步骤和启动方式。"),
+            "usage": ("使用说明", "描述 {{软件名称}} 的常用操作流程。"),
+            "features": ("功能介绍", "列出 {{软件名称}} 的核心功能，并说明每个功能的使用方法。"),
+            "troubleshooting": ("常见问题", "整理用户可能遇到的问题及处理方法。"),
+        }
+        for index, key in enumerate(section_keys, start=1):
+            title, body = section_templates.get(key, (key, "请补充本章节内容。"))
+            self.db.add(ManualSection(
+                project_id=project_id,
+                title=title,
+                body_markdown=body,
+                order_index=index
+            ))
+        self.db.commit()
     
     async def get_user_projects(
-        self, 
-        user_id: int, 
+        self,
+        user_id: int,
         project_type: Optional[str] = None,
         page: int = 1,
-        page_size: int = 10
+        page_size: int = 10,
+        keyword: Optional[str] = None,
+        order: str = "updated_desc",
     ) -> Dict[str, Any]:
-        """获取用户项目列表"""
+        """获取用户项目列表，可按名称关键词与排序方式过滤。"""
         query = self.db.query(Project).filter(Project.owner_id == user_id)
-        
+
         if project_type:
             query = query.filter(Project.project_type == project_type)
-        
-        # 计算总数
+
+        if keyword:
+            cleaned = keyword.strip()
+            if cleaned:
+                query = query.filter(Project.project_name.contains(cleaned))
+
+        order_map = {
+            "updated_desc": Project.updated_at.desc(),
+            "updated_asc": Project.updated_at.asc(),
+            "created_desc": Project.created_at.desc(),
+            "created_asc": Project.created_at.asc(),
+            "name_asc": Project.project_name.asc(),
+            "name_desc": Project.project_name.desc(),
+        }
+        order_clause = order_map.get(order, Project.updated_at.desc())
+        query = query.order_by(order_clause)
+
         total = query.count()
-        
-        # 分页查询
         offset = (page - 1) * page_size
         projects = query.offset(offset).limit(page_size).all()
-        
+
         return {
             "projects": [
                 {
@@ -73,7 +116,7 @@ class ProjectService:
             "total": total,
             "page": page,
             "page_size": page_size,
-            "total_pages": (total + page_size - 1) // page_size
+            "total_pages": (total + page_size - 1) // page_size,
         }
     
     async def get_project_by_id(self, project_id: int, user_id: int) -> Optional[Project]:
@@ -142,6 +185,17 @@ class ProjectService:
         ).first()
         if existing_item:
             return True  # 已存在，返回成功
+
+        policy = FileService(self.db).get_upload_policy()
+        current_size = (
+            self.db.query(func.coalesce(func.sum(UploadedFile.file_size), 0))
+            .join(ProjectItem, ProjectItem.file_id == UploadedFile.id)
+            .filter(ProjectItem.project_id == project_id)
+            .scalar()
+            or 0
+        )
+        if current_size + file_record.file_size > policy["max_project_size_bytes"]:
+            return False
 
         # 获取当前项目中文件的最大顺序
         max_order = self.db.query(ProjectItem).filter(
@@ -288,5 +342,156 @@ class ProjectService:
             return True
 
         except Exception as e:
+            self.db.rollback()
+            return False
+
+    def _manual_section_to_dict(self, section: ManualSection) -> Dict[str, Any]:
+        """Convert a manual section model into API response data."""
+        image = section.image_file
+        return {
+            "id": section.id,
+            "project_id": section.project_id,
+            "title": section.title,
+            "image_file_id": section.image_file_id,
+            "image_filename": image.original_filename if image else None,
+            "image_url": f"/uploads/{Path(image.storage_path).name}" if image else None,
+            "body_markdown": section.body_markdown,
+            "order_index": section.order_index,
+            "created_at": section.created_at,
+            "updated_at": section.updated_at,
+        }
+
+    async def get_manual_sections(self, project_id: int, user_id: int) -> Optional[List[Dict[str, Any]]]:
+        """获取操作文档章节列表"""
+        project = await self.get_project_by_id(project_id, user_id)
+        if not project:
+            return None
+
+        sections = self.db.query(ManualSection).filter(
+            ManualSection.project_id == project_id
+        ).order_by(ManualSection.order_index, ManualSection.id).all()
+
+        return [self._manual_section_to_dict(section) for section in sections]
+
+    async def create_manual_section(
+        self,
+        project_id: int,
+        user_id: int,
+        section_data: ManualSectionCreate
+    ) -> Optional[Dict[str, Any]]:
+        """创建操作文档章节"""
+        project = await self.get_project_by_id(project_id, user_id)
+        if not project or project.project_type != "manual":
+            return None
+
+        if section_data.image_file_id:
+            image = self.db.query(UploadedFile).filter(
+                UploadedFile.id == section_data.image_file_id,
+                UploadedFile.uploader_id == user_id
+            ).first()
+            if not image:
+                return None
+
+        order_index = section_data.order_index
+        if order_index is None:
+            order_index = self.db.query(ManualSection).filter(
+                ManualSection.project_id == project_id
+            ).count() + 1
+
+        section = ManualSection(
+            project_id=project_id,
+            title=section_data.title,
+            image_file_id=section_data.image_file_id,
+            body_markdown=section_data.body_markdown,
+            order_index=order_index
+        )
+
+        self.db.add(section)
+        self.db.commit()
+        self.db.refresh(section)
+
+        return self._manual_section_to_dict(section)
+
+    async def update_manual_section(
+        self,
+        project_id: int,
+        section_id: int,
+        user_id: int,
+        section_data: ManualSectionUpdate
+    ) -> Optional[Dict[str, Any]]:
+        """更新操作文档章节"""
+        project = await self.get_project_by_id(project_id, user_id)
+        if not project or project.project_type != "manual":
+            return None
+
+        section = self.db.query(ManualSection).filter(
+            ManualSection.id == section_id,
+            ManualSection.project_id == project_id
+        ).first()
+        if not section:
+            return None
+
+        if section_data.image_file_id:
+            image = self.db.query(UploadedFile).filter(
+                UploadedFile.id == section_data.image_file_id,
+                UploadedFile.uploader_id == user_id
+            ).first()
+            if not image:
+                return None
+
+        update_data = section_data.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(section, key, value)
+
+        self.db.commit()
+        self.db.refresh(section)
+
+        return self._manual_section_to_dict(section)
+
+    async def delete_manual_section(self, project_id: int, section_id: int, user_id: int) -> bool:
+        """删除操作文档章节"""
+        project = await self.get_project_by_id(project_id, user_id)
+        if not project:
+            return False
+
+        section = self.db.query(ManualSection).filter(
+            ManualSection.id == section_id,
+            ManualSection.project_id == project_id
+        ).first()
+        if not section:
+            return False
+
+        self.db.delete(section)
+        self.db.commit()
+        return True
+
+    async def reorder_manual_sections(
+        self,
+        project_id: int,
+        section_orders: list,
+        user_id: int
+    ) -> bool:
+        """重新排序操作文档章节"""
+        project = await self.get_project_by_id(project_id, user_id)
+        if not project:
+            return False
+
+        try:
+            for order_data in section_orders:
+                section_id = order_data.get("section_id")
+                order_index = order_data.get("order_index")
+                if section_id is None or order_index is None:
+                    continue
+
+                section = self.db.query(ManualSection).filter(
+                    ManualSection.id == section_id,
+                    ManualSection.project_id == project_id
+                ).first()
+                if section:
+                    section.order_index = order_index
+
+            self.db.commit()
+            return True
+        except Exception:
             self.db.rollback()
             return False

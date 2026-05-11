@@ -238,8 +238,8 @@ defineExpose({
   justify-content: space-between;
   align-items: center;
   padding: 12px 16px;
-  border-bottom: 1px solid #e4e7ed;
-  background-color: #f8f9fa;
+  border-bottom: 1px solid var(--cw-border);
+  background-color: var(--cw-surface-soft);
 }
 
 .toolbar-left {
@@ -291,10 +291,10 @@ defineExpose({
 }
 
 .highlighted-code :deep(.highlight .linenos) {
-  background-color: #f8f9fa;
-  color: #666;
+  background-color: var(--cw-blue-25);
+  color: var(--cw-text-muted);
   padding-right: 8px;
-  border-right: 1px solid #e4e7ed;
+  border-right: 1px solid var(--cw-border);
   user-select: none;
 }
 
@@ -308,6 +308,6 @@ defineExpose({
 .dialog-footer {
   text-align: right;
   padding: 12px 16px;
-  border-top: 1px solid #e4e7ed;
+  border-top: 1px solid var(--cw-border);
 }
 </style>

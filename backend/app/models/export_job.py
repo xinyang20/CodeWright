@@ -17,6 +17,8 @@ class ExportJob(Base):
     progress = Column(Integer, default=0)  # 0-100
     result_file_path = Column(String(500))
     error_message = Column(Text)
+    error_log_path = Column(String(500))
+    options_json = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     

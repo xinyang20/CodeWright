@@ -18,6 +18,30 @@
         <el-radio-button value="code">代码文件</el-radio-button>
         <el-radio-button value="manual">操作文档</el-radio-button>
       </el-radio-group>
+      <el-input
+        v-model="filters.keyword"
+        class="filter-input"
+        placeholder="搜索项目名称"
+        clearable
+        @input="handleKeywordChange"
+        @clear="handleFilterChange"
+      >
+        <template #prefix>
+          <el-icon><Search /></el-icon>
+        </template>
+      </el-input>
+      <el-select
+        v-model="filters.order"
+        class="filter-input"
+        placeholder="排序方式"
+        @change="handleFilterChange"
+      >
+        <el-option label="按更新时间倒序" value="updated_desc" />
+        <el-option label="按更新时间正序" value="updated_asc" />
+        <el-option label="按创建时间倒序" value="created_desc" />
+        <el-option label="按名称 A→Z" value="name_asc" />
+        <el-option label="按名称 Z→A" value="name_desc" />
+      </el-select>
     </div>
 
     <!-- 项目列表 -->
@@ -87,21 +111,22 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, MoreFilled } from '@element-plus/icons-vue'
+import { Plus, MoreFilled, Search } from '@element-plus/icons-vue'
 import type { Project, ProjectListResponse } from '@/types'
 import { projectApi } from '@/utils/api'
 
-// 响应式数据
+const router = useRouter()
 const loading = ref(false)
 const projects = ref<Project[]>([])
 
-// 筛选器
 const filters = reactive({
-  project_type: ''
+  project_type: '',
+  keyword: '',
+  order: 'updated_desc',
 })
 
-// 分页
 const pagination = reactive({
   page: 1,
   page_size: 10,
@@ -109,14 +134,21 @@ const pagination = reactive({
   total_pages: 0
 })
 
-// 获取项目列表
+let keywordTimer: ReturnType<typeof setTimeout> | null = null
+
 const fetchProjects = async () => {
   try {
     loading.value = true
-    const params = {
+    const params: Record<string, string | number> = {
       page: pagination.page,
       page_size: pagination.page_size,
-      ...(filters.project_type && { project_type: filters.project_type })
+      order: filters.order,
+    }
+    if (filters.project_type) {
+      params.project_type = filters.project_type
+    }
+    if (filters.keyword.trim()) {
+      params.keyword = filters.keyword.trim()
     }
 
     const response = await projectApi.getProjects(params)
@@ -136,39 +168,42 @@ const fetchProjects = async () => {
   }
 }
 
-// 处理筛选器变化
 const handleFilterChange = () => {
   pagination.page = 1
   fetchProjects()
 }
 
-// 处理分页大小变化
+const handleKeywordChange = () => {
+  if (keywordTimer) {
+    clearTimeout(keywordTimer)
+  }
+  keywordTimer = setTimeout(() => {
+    pagination.page = 1
+    fetchProjects()
+  }, 300)
+}
+
 const handleSizeChange = (size: number) => {
   pagination.page_size = size
   pagination.page = 1
   fetchProjects()
 }
 
-// 处理页码变化
 const handleCurrentChange = (page: number) => {
   pagination.page = page
   fetchProjects()
 }
 
-// 处理项目点击
 const handleProjectClick = (project: Project) => {
-  // 跳转到项目详情页
-  window.location.href = `/projects/${project.id}`
+  router.push(`/projects/${project.id}`)
 }
 
-// 处理下拉菜单命令
 const handleCommand = async (command: string) => {
   const [action, projectId] = command.split('-')
   const id = parseInt(projectId)
 
   if (action === 'edit') {
-    // 跳转到项目编辑页（暂时跳转到详情页）
-    window.location.href = `/projects/${id}`
+    router.push(`/projects/${id}`)
   } else if (action === 'delete') {
     try {
       await ElMessageBox.confirm(
@@ -237,7 +272,15 @@ onMounted(() => {
 }
 
 .filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
   margin-bottom: 24px;
+}
+
+.filter-input {
+  width: 220px;
 }
 
 .project-grid {
