@@ -84,7 +84,8 @@ CodeWright（代码版权工匠）是一个面向中国大陆用户、仅提供�
   * **数据库**：`SQLite`（`SQLAlchemy` ORM）。
   * **PDF 生成**：
       * **代码高亮**：`Pygments`（代码→HTML，支持行号与样式）。
-      * **HTML→PDF**：`WeasyPrint`（支持页眉页脚与样式定制），容器内置中文字体（思源黑体/宋体）。
+      * **LaTeX→PDF**：`PyTinyTeX` 自带 XeLaTeX 引擎；后端将代码/章节渲染为 LaTeX 源文件再编译，预安装 `xeCJK / fvextra / multicol / titlesec` 等宏包，使用系统/容器内置的思源黑体或 PingFang 等 CJK 字体。
+      * 当本地未安装 LaTeX 且未启用 PyTinyTeX 时，可设置环境变量 `CODEWRIGHT_ALLOW_IMAGE_PDF_FALLBACK=1`，临时使用图片型 PDF 作为兜底（仅推荐测试环境）。
   * **部署**：`Docker` & `Docker Compose`、`Nginx` 反向代理、外部队列服务均归入后续部署阶段，本地版本不依赖系统级服务。
 
 -----
@@ -340,9 +341,12 @@ CodeWright（代码版权工匠）是一个面向中国大陆用户、仅提供�
 #### **13. PDF 渲染与安全管线**
 
 - 前端预览：markdown-it 解析 → DOMPurify 清洗 → highlight.js 仅用于浏览器侧高亮。
-- 后端导出：Pygments（代码→HTML，行号/连续编号可选）→ WeasyPrint（HTML+CSS→PDF，中文字体内置）。
+- 后端导出：Pygments（代码→HTML，行号/连续编号可选）→ LaTeX（XeLaTeX via PyTinyTeX）。
+  - 通用导言：`fontspec / xeCJK / fvextra / multicol / titlesec / hyperref` 等。
+  - 字体：通过 `fontspec` 检测 `PingFang SC / Songti SC / Heiti SC / Noto Sans CJK SC` 等候选 CJK 字体，等宽字体优先 `Menlo / Monaco / Consolas`。
+  - 错误处理：每次任务在 `runtime/exports/logs/<job_id>.log` 留档，前端可下载排查。
 - 安全：上传白名单（.py .java .js .ts .md .png .jpg .jpeg .gif .txt .c .cpp）；大小限制；拒绝可执行二进制；清洗 Markdown/HTML 防 XSS。
-- 性能：目标 2000 行 < 10s；图片导出按页宽压缩；异步队列可横向扩展。
+- 性能：目标 2000 行 < 10s；图片导出按页宽压缩到 1600px；异步队列可横向扩展。
 
 #### **14. 错误码与响应约定**
 

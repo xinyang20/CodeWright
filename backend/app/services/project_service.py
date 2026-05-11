@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 
 from app.models.project import Project, ProjectItem
 from app.models.file import UploadedFile
@@ -67,25 +67,40 @@ class ProjectService:
         self.db.commit()
     
     async def get_user_projects(
-        self, 
-        user_id: int, 
+        self,
+        user_id: int,
         project_type: Optional[str] = None,
         page: int = 1,
-        page_size: int = 10
+        page_size: int = 10,
+        keyword: Optional[str] = None,
+        order: str = "updated_desc",
     ) -> Dict[str, Any]:
-        """获取用户项目列表"""
+        """获取用户项目列表，可按名称关键词与排序方式过滤。"""
         query = self.db.query(Project).filter(Project.owner_id == user_id)
-        
+
         if project_type:
             query = query.filter(Project.project_type == project_type)
-        
-        # 计算总数
+
+        if keyword:
+            cleaned = keyword.strip()
+            if cleaned:
+                query = query.filter(Project.project_name.contains(cleaned))
+
+        order_map = {
+            "updated_desc": Project.updated_at.desc(),
+            "updated_asc": Project.updated_at.asc(),
+            "created_desc": Project.created_at.desc(),
+            "created_asc": Project.created_at.asc(),
+            "name_asc": Project.project_name.asc(),
+            "name_desc": Project.project_name.desc(),
+        }
+        order_clause = order_map.get(order, Project.updated_at.desc())
+        query = query.order_by(order_clause)
+
         total = query.count()
-        
-        # 分页查询
         offset = (page - 1) * page_size
         projects = query.offset(offset).limit(page_size).all()
-        
+
         return {
             "projects": [
                 {
@@ -101,7 +116,7 @@ class ProjectService:
             "total": total,
             "page": page,
             "page_size": page_size,
-            "total_pages": (total + page_size - 1) // page_size
+            "total_pages": (total + page_size - 1) // page_size,
         }
     
     async def get_project_by_id(self, project_id: int, user_id: int) -> Optional[Project]:
@@ -172,11 +187,12 @@ class ProjectService:
             return True  # 已存在，返回成功
 
         policy = FileService(self.db).get_upload_policy()
-        current_size = sum(
-            item.file.file_size
-            for item in self.db.query(ProjectItem).join(UploadedFile).filter(
-                ProjectItem.project_id == project_id
-            ).all()
+        current_size = (
+            self.db.query(func.coalesce(func.sum(UploadedFile.file_size), 0))
+            .join(ProjectItem, ProjectItem.file_id == UploadedFile.id)
+            .filter(ProjectItem.project_id == project_id)
+            .scalar()
+            or 0
         )
         if current_size + file_record.file_size > policy["max_project_size_bytes"]:
             return False

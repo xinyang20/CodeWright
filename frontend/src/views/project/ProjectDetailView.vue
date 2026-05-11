@@ -73,9 +73,9 @@
               <div v-for="(section, index) in manualSections" :key="section.id" class="section-item">
                 <div class="section-main">
                   <div class="section-order">{{ index + 1 }}</div>
-                  <div>
+                  <div class="section-body">
                     <h3>{{ section.title }}</h3>
-                    <p>{{ section.body_markdown }}</p>
+                    <MarkdownView :source="section.body_markdown" class="section-markdown" />
                     <el-tag v-if="section.image_filename" size="small" type="info">
                       {{ section.image_filename }}
                     </el-tag>
@@ -133,12 +133,6 @@
                     <el-checkbox value="wrap_lines">自动换行</el-checkbox>
                     <el-checkbox value="file_name_bold">文件名加粗</el-checkbox>
                   </el-checkbox-group>
-                </el-form-item>
-                <el-form-item label="页面布局">
-                  <el-radio-group v-model="configForm.code_options.layout">
-                    <el-radio value="single_column">单列</el-radio>
-                    <el-radio value="double_column">双列</el-radio>
-                  </el-radio-group>
                 </el-form-item>
                 <el-form-item label="字号">
                   <el-select v-model="configForm.code_options.font_size">
@@ -223,7 +217,24 @@
                 </el-tag>
               </div>
               <el-progress :percentage="currentExportJob.progress" />
-              <p v-if="currentExportJob.error_message">{{ currentExportJob.error_message }}</p>
+              <p v-if="currentExportJob.error_message" class="export-job-error">
+                {{ currentExportJob.error_message }}
+              </p>
+              <div class="export-job-actions">
+                <el-button
+                  v-if="currentExportJob.error_log_url"
+                  size="small"
+                  type="primary"
+                  link
+                  @click="openExportJobLog(currentExportJob)"
+                >查看 LaTeX 日志</el-button>
+                <el-button
+                  v-if="currentExportJob.status === 'failed'"
+                  size="small"
+                  type="primary"
+                  @click="retryExportJob(currentExportJob)"
+                >重试导出</el-button>
+              </div>
             </div>
             <el-empty v-if="exportHistories.length === 0" description="暂无导出记录" />
             <div v-else class="history-list">
@@ -261,13 +272,13 @@
       <FileUpload :project-id="project?.id" :auto-add-to-project="true" @success="handleUploadSuccess" @error="handleUploadError" />
     </el-dialog>
 
-    <el-dialog v-model="showSectionDialog" :title="sectionForm.id ? '编辑章节' : '添加章节'" width="720px">
+    <el-dialog v-model="showSectionDialog" :title="sectionForm.id ? '编辑章节' : '添加章节'" width="960px" top="6vh">
       <el-form label-position="top">
         <el-form-item label="章节标题">
           <el-input v-model="sectionForm.title" maxlength="200" show-word-limit />
         </el-form-item>
         <el-form-item label="正文 Markdown">
-          <el-input v-model="sectionForm.body_markdown" type="textarea" :rows="8" />
+          <MarkdownEditor v-model="sectionForm.body_markdown" :rows="14" :min-height="320" />
         </el-form-item>
         <el-form-item label="章节截图">
           <div class="image-field">
@@ -306,6 +317,8 @@ import SortableFileList from '@/components/SortableFileList.vue'
 import LanguageSelector from '@/components/LanguageSelector.vue'
 import CodePreview from '@/components/CodePreview.vue'
 import HtmlPreview from '@/components/HtmlPreview.vue'
+import MarkdownEditor from '@/components/MarkdownEditor.vue'
+import MarkdownView from '@/components/MarkdownView.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -499,20 +512,33 @@ const saveProjectConfig = async () => {
   }
 }
 
-const buildExportOptions = () => ({
-  include_toc: configForm.export_options.includes('include_toc'),
-  include_summary: configForm.export_options.includes('include_summary'),
-  watermark: configForm.export_options.includes('watermark'),
-  formatting: configForm.code_options.formatting,
-  layout: configForm.code_options.layout,
-  font_size: configForm.code_options.font_size,
-  template: configForm.manual_options.template,
-  template_id: Number.isFinite(Number(configForm.manual_options.template)) ? Number(configForm.manual_options.template) : null,
-  software_name: configForm.manual_options.software_name,
-  version: configForm.manual_options.version,
-  developer: configForm.manual_options.developer,
-  enable_global_variables: configForm.manual_options.enable_global_variables
-})
+const buildExportOptions = () => {
+  const base = {
+    include_toc: configForm.export_options.includes('include_toc'),
+    include_summary: configForm.export_options.includes('include_summary'),
+    watermark: configForm.export_options.includes('watermark'),
+  }
+  if (project.value?.project_type === 'manual') {
+    return {
+      ...base,
+      template: configForm.manual_options.template,
+      template_id: Number.isFinite(Number(configForm.manual_options.template))
+        ? Number(configForm.manual_options.template)
+        : null,
+      software_name: configForm.manual_options.software_name,
+      version: configForm.manual_options.version,
+      developer: configForm.manual_options.developer,
+      enable_global_variables: configForm.manual_options.enable_global_variables,
+    }
+  }
+  return {
+    ...base,
+    formatting: configForm.code_options.formatting,
+    // 暂时强制单列布局；双列实现尚未与目录/页眉等组件协调好，先关闭 UI。
+    layout: 'single_column',
+    font_size: configForm.code_options.font_size,
+  }
+}
 
 const currentExportOptions = computed(() => buildExportOptions())
 
@@ -569,6 +595,28 @@ const downloadExportJob = async (job: ExportJob) => {
   const response = await exportApi.downloadJobFile(job.job_id)
   const blob = response instanceof Blob ? response : new Blob([response], { type: 'application/pdf' })
   downloadPdfBlob(blob, `${project.value.project_name}.pdf`)
+}
+
+const openExportJobLog = (job: ExportJob) => {
+  if (!job.error_log_url) return
+  const url = exportApi.downloadJobLog(job.job_id)
+  window.open(url, '_blank', 'noopener')
+}
+
+const retryExportJob = async (job: ExportJob) => {
+  try {
+    const response = await exportApi.retryJob(job.job_id)
+    if (response.code === 0 && response.data) {
+      currentExportJob.value = response.data
+      startExportPolling(response.data.job_id)
+      ElMessage.success('已重新提交导出任务')
+    } else {
+      ElMessage.error(response.message || '重试失败')
+    }
+  } catch (error) {
+    console.error('重试导出失败:', error)
+    ElMessage.error(error instanceof Error ? error.message : '重试失败')
+  }
 }
 
 const downloadPdfBlob = (blob: Blob, filename: string) => {
@@ -981,6 +1029,20 @@ onBeforeUnmount(stopExportPolling)
   justify-content: space-between;
   align-items: center;
   margin-bottom: 8px;
+}
+
+.export-job-error {
+  margin: 6px 0;
+  color: var(--cw-text-muted);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.export-job-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
 }
 
 .dialog-footer {

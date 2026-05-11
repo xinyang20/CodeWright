@@ -200,20 +200,40 @@ export const fileApi = {
 
 // 导出相关API
 export const exportApi = {
-  exportProject: (projectId: number, options: any = {}): Promise<ApiResponse<ExportJob>> => 
-    api.post(`/exports/projects/${projectId}/export`, options),
-  
-  getExportStatus: (jobId: string): Promise<ApiResponse<ExportJob>> => 
+  exportProject: (projectId: number, options: any = {}): Promise<ApiResponse<ExportJob>> =>
+    api.post(`/projects/${projectId}/export`, options),
+
+  getExportStatus: (jobId: string): Promise<ApiResponse<ExportJob>> =>
     api.get(`/exports/${jobId}`),
 
-  getHistory: (params?: { project_id?: number }): Promise<ApiResponse<{ histories: ExportHistory[] }>> =>
+  getHistory: (params?: {
+    project_id?: number
+    status?: 'success' | 'failed'
+    start_at?: string
+    end_at?: string
+    page?: number
+    page_size?: number
+  }): Promise<ApiResponse<{ histories: ExportHistory[]; total: number; page: number; page_size: number; total_pages: number }>> =>
     api.get('/exports/history', { params }),
-  
-  downloadExport: (exportId: number): string => 
+
+  listJobs: (params?: {
+    status?: 'queued' | 'processing' | 'success' | 'failed'
+    page?: number
+    page_size?: number
+  }): Promise<ApiResponse<{ jobs: ExportJob[]; total: number; page: number; page_size: number; total_pages: number }>> =>
+    api.get('/exports/jobs', { params }),
+
+  retryJob: (jobId: string): Promise<ApiResponse<ExportJob>> =>
+    api.post(`/exports/${jobId}/retry`),
+
+  downloadExport: (exportId: number): string =>
     `${api.defaults.baseURL}/exports/download/${exportId}`,
 
   downloadJob: (jobId: string): string =>
     `${api.defaults.baseURL}/exports/${jobId}/download`,
+
+  downloadJobLog: (jobId: string): string =>
+    `${api.defaults.baseURL}/exports/${jobId}/log`,
 
   downloadJobFile: async (jobId: string): Promise<Blob> => {
     const blob = await api.get(`/exports/${jobId}/download`, {
@@ -295,6 +315,9 @@ export const settingsApi = {
       params: { status }
     }),
 
+  cloneTemplate: (templateId: number, version?: string): Promise<ApiResponse> =>
+    api.post(`/settings/templates/${templateId}/clone`, version ? { version } : {}),
+
   getSystemSettings: (): Promise<ApiResponse<SystemSettings>> =>
     api.get('/settings/system'),
 
@@ -306,6 +329,9 @@ export const settingsApi = {
 
   updateHighlightMapping: (mappings: HighlightMapping[]): Promise<ApiResponse<{ mappings: HighlightMapping[] }>> =>
     api.put('/settings/highlight-mapping', mappings),
+
+  deleteHighlightMapping: (suffix: string): Promise<ApiResponse> =>
+    api.delete(`/settings/highlight-mapping/${encodeURIComponent(suffix)}`),
 
   getAnnouncements: (): Promise<ApiResponse<{ announcements: Announcement[] }>> =>
     api.get('/settings/announcements'),

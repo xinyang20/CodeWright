@@ -102,17 +102,6 @@
               </el-checkbox-group>
             </el-form-item>
 
-            <!-- 页面布局选项 -->
-            <el-form-item label="页面布局">
-              <el-radio-group v-model="form.code_options.layout">
-                <el-radio value="single_column">单列布局</el-radio>
-                <el-radio value="double_column">双列布局</el-radio>
-              </el-radio-group>
-              <div class="form-tip">
-                双列布局适合代码量较大的项目，可以更好地利用页面空间
-              </div>
-            </el-form-item>
-
             <!-- 字体设置 -->
             <el-form-item label="字体大小">
               <el-select v-model="form.code_options.font_size" placeholder="选择字体大小">

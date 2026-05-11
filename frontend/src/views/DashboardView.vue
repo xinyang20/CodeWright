@@ -95,7 +95,7 @@
           <div v-else class="announcement-list">
             <div v-for="announcement in announcements" :key="announcement.id" class="announcement-item">
               <strong>{{ announcement.title }}</strong>
-              <p>{{ announcement.body_markdown }}</p>
+              <MarkdownView :source="truncatePlainText(announcement.body_markdown, 200)" class="announcement-body" />
             </div>
           </div>
         </el-card>
@@ -111,6 +111,8 @@ import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { exportApi, projectApi, settingsApi } from '@/utils/api'
 import type { Announcement, ExportHistory, Project, ProjectListResponse } from '@/types'
+import MarkdownView from '@/components/MarkdownView.vue'
+import { truncatePlainText } from '@/utils/markdown'
 
 const authStore = useAuthStore()
 
@@ -245,11 +247,9 @@ onMounted(fetchDashboard)
   margin-bottom: 16px;
 }
 
-.announcement-item p {
-  margin: 6px 0 0;
-  color: #666;
+.announcement-body {
+  margin-top: 6px;
   font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
+  color: #555;
 }
 </style>

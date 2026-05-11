@@ -12,50 +12,60 @@ from pygments.util import ClassNotFound
 from app.models.highlight_mapping import HighlightMapping
 from app.services.file_service import FileService
 
+DEFAULT_HIGHLIGHT_MAPPINGS: tuple[tuple[str, str], ...] = (
+    ('.py', 'python'),
+    ('.java', 'java'),
+    ('.js', 'javascript'),
+    ('.ts', 'typescript'),
+    ('.c', 'c'),
+    ('.cpp', 'cpp'),
+    ('.h', 'c'),
+    ('.hpp', 'cpp'),
+    ('.css', 'css'),
+    ('.html', 'html'),
+    ('.xml', 'xml'),
+    ('.json', 'json'),
+    ('.yml', 'yaml'),
+    ('.yaml', 'yaml'),
+    ('.sql', 'sql'),
+    ('.sh', 'bash'),
+    ('.bat', 'batch'),
+    ('.md', 'markdown'),
+    ('.txt', 'text'),
+)
+
+
 class HighlightService:
+    """Default mappings are seeded at app startup, see ``bootstrap_default_mappings``."""
+
+    _bootstrap_done = False
+
     def __init__(self, db: Session):
         self.db = db
         self.file_service = FileService(db)
-        self._init_default_mappings()
-    
-    def _init_default_mappings(self):
-        """初始化默认的文件扩展名到语言的映射"""
-        default_mappings = [
-            ('.py', 'python'),
-            ('.java', 'java'),
-            ('.js', 'javascript'),
-            ('.ts', 'typescript'),
-            ('.c', 'c'),
-            ('.cpp', 'cpp'),
-            ('.h', 'c'),
-            ('.hpp', 'cpp'),
-            ('.css', 'css'),
-            ('.html', 'html'),
-            ('.xml', 'xml'),
-            ('.json', 'json'),
-            ('.yml', 'yaml'),
-            ('.yaml', 'yaml'),
-            ('.sql', 'sql'),
-            ('.sh', 'bash'),
-            ('.bat', 'batch'),
-            ('.md', 'markdown'),
-            ('.txt', 'text'),
-        ]
-        
-        for suffix, language in default_mappings:
-            existing = self.db.query(HighlightMapping).filter(
+
+    @classmethod
+    def bootstrap_default_mappings(cls, db: Session, force: bool = False) -> None:
+        """Insert any missing default suffix→language rows once per process."""
+        if cls._bootstrap_done and not force:
+            return
+
+        added = False
+        for suffix, language in DEFAULT_HIGHLIGHT_MAPPINGS:
+            existing = db.query(HighlightMapping).filter(
                 HighlightMapping.suffix == suffix
             ).first()
-            
             if not existing:
-                mapping = HighlightMapping(
+                db.add(HighlightMapping(
                     suffix=suffix,
                     language=language,
-                    enabled=True
-                )
-                self.db.add(mapping)
-        
-        self.db.commit()
+                    enabled=True,
+                ))
+                added = True
+
+        if added:
+            db.commit()
+        cls._bootstrap_done = True
     
     def get_language_for_file(self, filename: str, language_override: Optional[str] = None) -> str:
         """获取文件对应的语言标识"""
@@ -167,7 +177,7 @@ class HighlightService:
 
     async def get_mappings(self) -> list[dict]:
         """获取后缀名到语言的映射列表"""
-        self._init_default_mappings()
+        HighlightService.bootstrap_default_mappings(self.db)
         mappings = self.db.query(HighlightMapping).order_by(HighlightMapping.suffix).all()
         return [
             {
@@ -202,3 +212,20 @@ class HighlightService:
 
         self.db.commit()
         return await self.get_mappings()
+
+    async def delete_mapping(self, suffix: str) -> bool:
+        """删除指定后缀的映射；当 suffix 不存在时返回 False。"""
+        normalized = (suffix or "").strip().lower()
+        if not normalized:
+            return False
+        if not normalized.startswith("."):
+            normalized = f".{normalized}"
+
+        mapping = self.db.query(HighlightMapping).filter(
+            HighlightMapping.suffix == normalized
+        ).first()
+        if not mapping:
+            return False
+        self.db.delete(mapping)
+        self.db.commit()
+        return True

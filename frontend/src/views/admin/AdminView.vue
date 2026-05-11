@@ -62,9 +62,11 @@
             <el-pagination
               v-model:current-page="userPage"
               v-model:page-size="userPageSize"
+              :page-sizes="[10, 20, 50, 100]"
               :total="userTotal"
-              layout="total, prev, pager, next"
+              layout="total, sizes, prev, pager, next, jumper"
               @current-change="fetchUsers"
+              @size-change="handleUserSizeChange"
             />
           </div>
         </el-tab-pane>
@@ -102,6 +104,11 @@
             </el-table-column>
             <el-table-column label="更新时间" width="190">
               <template #default="{ row }">{{ formatDate(row.updated_at) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="160">
+              <template #default="{ row }">
+                <el-button text type="primary" @click="cloneTemplate(row)">复制版本</el-button>
+              </template>
             </el-table-column>
           </el-table>
         </el-tab-pane>
@@ -184,33 +191,9 @@
         </el-tab-pane>
 
         <el-tab-pane label="公告管理" name="announcements">
-          <el-form :model="announcementForm" label-position="top" class="announcement-form">
-            <el-row :gutter="16">
-              <el-col :xs="24" :lg="8">
-                <el-form-item label="标题">
-                  <el-input v-model="announcementForm.title" maxlength="200" show-word-limit />
-                </el-form-item>
-              </el-col>
-              <el-col :xs="24" :lg="4">
-                <el-form-item label="状态">
-                  <el-select v-model="announcementForm.status">
-                    <el-option label="草稿" value="draft" />
-                    <el-option label="发布" value="published" />
-                    <el-option label="下线" value="archived" />
-                  </el-select>
-                </el-form-item>
-              </el-col>
-              <el-col :xs="24" :lg="12">
-                <el-form-item label="正文 Markdown">
-                  <el-input v-model="announcementForm.body_markdown" type="textarea" :rows="3" />
-                </el-form-item>
-              </el-col>
-            </el-row>
-            <div class="form-actions">
-              <el-button @click="resetAnnouncementForm">清空</el-button>
-              <el-button type="primary" @click="saveAnnouncement">{{ announcementForm.id ? '更新公告' : '创建公告' }}</el-button>
-            </div>
-          </el-form>
+          <div class="announcement-toolbar">
+            <el-button type="primary" @click="openAnnouncementDialog()">新增公告</el-button>
+          </div>
 
           <el-table :data="announcements" stripe>
             <el-table-column prop="title" label="标题" />
@@ -224,7 +207,7 @@
             </el-table-column>
             <el-table-column label="操作" width="180">
               <template #default="{ row }">
-                <el-button text type="primary" @click="editAnnouncement(row)">编辑</el-button>
+                <el-button text type="primary" @click="openAnnouncementDialog(row)">编辑</el-button>
                 <el-button text type="danger" @click="deleteAnnouncement(row.id)">删除</el-button>
               </template>
             </el-table-column>
@@ -256,10 +239,50 @@
                 <el-switch v-model="row.enabled" />
               </template>
             </el-table-column>
+            <el-table-column label="操作" width="120">
+              <template #default="{ row, $index }">
+                <el-button text type="danger" @click="deleteMapping(row, $index)">删除</el-button>
+              </template>
+            </el-table-column>
           </el-table>
         </el-tab-pane>
       </el-tabs>
     </el-card>
+
+    <el-dialog
+      v-model="showAnnouncementDialog"
+      :title="announcementForm.id ? '编辑公告' : '新增公告'"
+      width="960px"
+      top="6vh"
+    >
+      <el-form :model="announcementForm" label-position="top">
+        <el-row :gutter="16">
+          <el-col :xs="24" :lg="16">
+            <el-form-item label="标题">
+              <el-input v-model="announcementForm.title" maxlength="200" show-word-limit />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :lg="8">
+            <el-form-item label="状态">
+              <el-select v-model="announcementForm.status">
+                <el-option label="草稿" value="draft" />
+                <el-option label="发布" value="published" />
+                <el-option label="下线" value="archived" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="正文 Markdown">
+          <MarkdownEditor v-model="announcementForm.body_markdown" :rows="14" :min-height="320" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="closeAnnouncementDialog">取消</el-button>
+          <el-button type="primary" @click="saveAnnouncement">{{ announcementForm.id ? '更新公告' : '创建公告' }}</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -268,6 +291,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { adminApi, settingsApi } from '@/utils/api'
+import MarkdownEditor from '@/components/MarkdownEditor.vue'
 import type {
   AdminStats,
   Announcement,
@@ -332,6 +356,8 @@ const announcementForm = reactive({
   status: 'draft' as Announcement['status']
 })
 
+const showAnnouncementDialog = ref(false)
+
 const newMapping = reactive<HighlightMapping>({
   suffix: '',
   language: '',
@@ -372,6 +398,12 @@ const fetchUsers = async () => {
     users.value = data.users
     userTotal.value = data.total
   }
+}
+
+const handleUserSizeChange = (size: number) => {
+  userPageSize.value = size
+  userPage.value = 1
+  fetchUsers()
 }
 
 const updateUserStatus = async (userId: number, isActive: boolean) => {
@@ -445,6 +477,41 @@ const updateTemplateStatus = async (templateId: number, status: 'draft' | 'publi
     ElMessage.error('模板状态更新失败')
     fetchTemplates()
   }
+}
+
+const cloneTemplate = async (template: TemplateInfo) => {
+  try {
+    const result = await ElMessageBox.prompt('请输入新版本号', '复制模板', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      inputValue: bumpVersion(template.version),
+      inputPattern: /.+/,
+      inputErrorMessage: '版本号不能为空',
+    })
+    const response = await settingsApi.cloneTemplate(template.id, result.value)
+    if (response.code === 0) {
+      ElMessage.success('已生成新版本草稿')
+      fetchTemplates()
+    } else {
+      ElMessage.error(response.message || '复制模板失败')
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('复制模板失败:', error)
+      ElMessage.error(error instanceof Error ? error.message : '复制模板失败')
+    }
+  }
+}
+
+const bumpVersion = (version: string): string => {
+  const parts = version.split('.')
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    if (/^\d+$/.test(parts[index])) {
+      parts[index] = String(parseInt(parts[index], 10) + 1)
+      return parts.join('.')
+    }
+  }
+  return `${version}.1`
 }
 
 const fetchSettings = async () => {
@@ -550,18 +617,28 @@ const saveAnnouncement = async () => {
 
   if (response.code === 0) {
     ElMessage.success('公告已保存')
-    resetAnnouncementForm()
+    closeAnnouncementDialog()
     fetchAnnouncements()
   } else {
     ElMessage.error(response.message || '保存公告失败')
   }
 }
 
-const editAnnouncement = (announcement: Announcement) => {
-  announcementForm.id = announcement.id
-  announcementForm.title = announcement.title
-  announcementForm.body_markdown = announcement.body_markdown
-  announcementForm.status = announcement.status
+const openAnnouncementDialog = (announcement?: Announcement) => {
+  if (announcement) {
+    announcementForm.id = announcement.id
+    announcementForm.title = announcement.title
+    announcementForm.body_markdown = announcement.body_markdown
+    announcementForm.status = announcement.status
+  } else {
+    resetAnnouncementForm()
+  }
+  showAnnouncementDialog.value = true
+}
+
+const closeAnnouncementDialog = () => {
+  showAnnouncementDialog.value = false
+  resetAnnouncementForm()
 }
 
 const resetAnnouncementForm = () => {
@@ -629,6 +706,30 @@ const saveMappings = async () => {
     ElMessage.success('高亮映射已保存')
   } else {
     ElMessage.error(response.message || '保存高亮映射失败')
+  }
+}
+
+const deleteMapping = async (mapping: HighlightMapping, index: number) => {
+  try {
+    await ElMessageBox.confirm(`确定删除后缀 ${mapping.suffix} 吗？`, '确认删除', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    if (mapping.suffix) {
+      const response = await settingsApi.deleteHighlightMapping(mapping.suffix)
+      if (response.code !== 0 && response.code !== 4001) {
+        ElMessage.error(response.message || '删除映射失败')
+        return
+      }
+    }
+    highlightMappings.value.splice(index, 1)
+    ElMessage.success('映射已删除')
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除映射失败:', error)
+      ElMessage.error('删除映射失败')
+    }
   }
 }
 
@@ -735,5 +836,15 @@ onMounted(refreshAll)
 .form-tip {
   font-size: 12px;
   margin-top: 4px;
+}
+
+.announcement-toolbar {
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.dialog-footer {
+  text-align: right;
 }
 </style>

@@ -6,11 +6,14 @@
     :before-close="handleClose"
     class="html-preview-dialog"
   >
-    <div class="pdf-preview" v-loading="loading">
+    <div class="pdf-preview">
       <div class="toolbar">
         <div class="toolbar-left">
-          <span class="mode-badge">PDF</span>
-          <span class="toolbar-label">预览与导出使用同一套 LaTeX PDF 生成链路</span>
+          <el-radio-group v-model="previewMode" size="small" @change="handleModeChange">
+            <el-radio-button value="pdf">PDF</el-radio-button>
+            <el-radio-button value="html">HTML</el-radio-button>
+          </el-radio-group>
+          <span class="toolbar-label">{{ modeHint }}</span>
         </div>
 
         <div class="toolbar-center">
@@ -18,11 +21,17 @@
         </div>
 
         <div class="toolbar-right">
-          <el-button type="text" size="small" @click="refreshPreview">
+          <el-button type="text" size="small" :disabled="loading" @click="refreshPreview">
             <el-icon><Refresh /></el-icon>
             刷新
           </el-button>
-          <el-button type="text" size="small" :loading="exporting" @click="exportPdf">
+          <el-button
+            type="text"
+            size="small"
+            :loading="exporting"
+            :disabled="loading || exporting"
+            @click="exportPdf"
+          >
             <el-icon><Download /></el-icon>
             下载 PDF
           </el-button>
@@ -30,20 +39,39 @@
       </div>
 
       <div ref="contentArea" class="content-area">
-        <div v-if="pageNumbers.length === 0 && !loading" class="preview-empty">
-          PDF 预览尚未生成
+        <!-- PDF mode: hand the blob URL to the browser's native PDF viewer.
+             This avoids the 9.6 MB pdfjs-dist worker bundle entirely. -->
+        <iframe
+          v-show="previewMode === 'pdf' && pdfBlobUrl"
+          class="pdf-frame"
+          :src="pdfBlobUrl || ''"
+          :title="`${project?.project_name || ''} PDF 预览`"
+        />
+
+        <!-- HTML mode: show iframe whenever we have srcdoc, regardless of loading. -->
+        <iframe
+          v-if="previewMode === 'html' && htmlSrcdoc"
+          class="html-frame"
+          sandbox="allow-same-origin"
+          :srcdoc="htmlSrcdoc"
+        />
+
+        <!-- Empty state: only when truly idle. -->
+        <div
+          v-if="!loading && !hasContent && loadingPhase === 'idle'"
+          class="preview-empty"
+        >
+          {{ previewMode === 'pdf' ? 'PDF 预览尚未生成，点击"刷新"重新尝试' : 'HTML 预览尚未生成，点击"刷新"重新尝试' }}
         </div>
-        <div v-else class="pdf-pages">
-          <div
-            v-for="pageNumber in pageNumbers"
-            :key="pageNumber"
-            class="pdf-page"
-          >
-            <canvas
-              :ref="(element) => setPageCanvas(pageNumber, element)"
-              class="pdf-page-canvas"
-            ></canvas>
-            <div class="page-number">第 {{ pageNumber }} / {{ pageCount }} 页</div>
+
+        <!-- Centered loading overlay covering compile + parse phases. -->
+        <div v-if="loading" class="preview-loading-overlay" role="status" aria-live="polite">
+          <div class="preview-loading-card">
+            <el-icon class="preview-loading-spinner is-loading">
+              <Loading />
+            </el-icon>
+            <p class="preview-loading-title">{{ loadingTitle }}</p>
+            <p class="preview-loading-hint">{{ loadingHint }}</p>
           </div>
         </div>
       </div>
@@ -58,11 +86,9 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref, watch, onBeforeUnmount, type ComponentPublicInstance } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh, Download } from '@element-plus/icons-vue'
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url'
-import type { PDFDocumentProxy } from 'pdfjs-dist'
+import { Refresh, Download, Loading } from '@element-plus/icons-vue'
 import type { Project } from '@/types'
 import { projectApi } from '@/utils/api'
 
@@ -78,33 +104,103 @@ const emit = defineEmits<{
   'update:modelValue': [value: boolean]
 }>()
 
+type PreviewMode = 'pdf' | 'html'
+
+type LoadingPhase = 'idle' | 'compiling'
+
 const visible = ref(false)
 const loading = ref(false)
+const loadingPhase = ref<LoadingPhase>('idle')
+const loadingElapsed = ref(0)
 const exporting = ref(false)
 const contentArea = ref<HTMLElement>()
-const pageNumbers = ref<number[]>([])
-const pageCount = ref(0)
-const pageCanvases = new Map<number, HTMLCanvasElement>()
+const previewMode = ref<PreviewMode>('pdf')
+const htmlSrcdoc = ref<string>('')
+const pdfBlobUrl = ref<string>('')
 let renderToken = 0
-let activePdfDocument: PDFDocumentProxy | null = null
+let loadingTimer: ReturnType<typeof setInterval> | null = null
+
+const modeHint = computed(() => {
+  return previewMode.value === 'pdf'
+    ? '预览与导出使用同一套 LaTeX PDF 生成链路'
+    : 'HTML 预览来自服务端模板渲染，便于排查样式与变量替换'
+})
+
+const hasContent = computed(() => {
+  return previewMode.value === 'pdf'
+    ? Boolean(pdfBlobUrl.value)
+    : Boolean(htmlSrcdoc.value)
+})
+
+const loadingTitle = computed(() => {
+  const verb = previewMode.value === 'pdf' ? '正在生成 PDF 预览' : '正在生成 HTML 预览'
+  const elapsed = loadingElapsed.value
+  if (elapsed === 0) {
+    return `${verb}，请稍候…`
+  }
+  return `${verb}，已耗时 ${elapsed}s`
+})
+
+const loadingHint = computed(() => {
+  const elapsed = loadingElapsed.value
+  if (previewMode.value !== 'pdf') {
+    return '后端正在渲染模板，请稍候。'
+  }
+  if (elapsed < 8) {
+    return '后端正在用 xelatex 编译，第一次约 5–15 秒。关闭"目录"可减半。'
+  }
+  if (elapsed < 30) {
+    return '正在调用 xelatex 编译，请耐心等待。'
+  }
+  return '项目较大或文件较多，xelatex 编译可能持续数十秒。'
+})
+
+const startLoadingTimer = () => {
+  stopLoadingTimer()
+  loadingElapsed.value = 0
+  loadingTimer = setInterval(() => {
+    loadingElapsed.value += 1
+  }, 1000)
+}
+
+const stopLoadingTimer = () => {
+  if (loadingTimer) {
+    clearInterval(loadingTimer)
+    loadingTimer = null
+  }
+}
+
+let pendingPreviewTimer: ReturnType<typeof setTimeout> | null = null
+
+const schedulePreview = (delayMs = 80) => {
+  if (!visible.value || !props.project) return
+  if (pendingPreviewTimer) {
+    clearTimeout(pendingPreviewTimer)
+  }
+  pendingPreviewTimer = setTimeout(() => {
+    pendingPreviewTimer = null
+    generatePreview()
+  }, delayMs)
+}
 
 watch(() => props.modelValue, (newValue) => {
   visible.value = newValue
   if (newValue && props.project) {
-    generatePreview()
+    // Set loading immediately so the dialog body shows the spinner the moment it mounts.
+    loading.value = true
+    startLoadingTimer()
+    // Tiny delay coalesces the immediate dialog-open watcher with any synchronous
+    // option-change watchers that fire in the same tick.
+    schedulePreview(0)
   }
 }, { immediate: true })
 
 watch(() => props.project?.id, () => {
-  if (visible.value && props.project) {
-    generatePreview()
-  }
+  schedulePreview(0)
 })
 
 watch(() => props.exportOptions, () => {
-  if (visible.value && props.project) {
-    generatePreview()
-  }
+  schedulePreview(150)
 }, { deep: true })
 
 watch(visible, (newValue) => {
@@ -118,108 +214,65 @@ const currentOptions = () => props.exportOptions || {}
 
 const clearPreview = () => {
   renderToken += 1
-  pageNumbers.value = []
-  pageCount.value = 0
-  pageCanvases.clear()
-  if (activePdfDocument) {
-    activePdfDocument.destroy()
-    activePdfDocument = null
+  loading.value = false
+  loadingPhase.value = 'idle'
+  stopLoadingTimer()
+  if (pendingPreviewTimer) {
+    clearTimeout(pendingPreviewTimer)
+    pendingPreviewTimer = null
+  }
+  htmlSrcdoc.value = ''
+  if (pdfBlobUrl.value) {
+    URL.revokeObjectURL(pdfBlobUrl.value)
+    pdfBlobUrl.value = ''
+  }
+}
+
+const handleModeChange = () => {
+  if (visible.value && props.project) {
+    generatePreview()
   }
 }
 
 const generatePreview = async () => {
   if (!props.project) return
 
+  const token = renderToken + 1
+  renderToken = token
+  const projectId = props.project.id
+  const mode = previewMode.value
+
   try {
     loading.value = true
-    const pdf = await projectApi.previewProjectPdf(props.project.id, currentOptions())
-    await renderPdf(pdf, renderToken + 1)
+    loadingPhase.value = 'compiling'
+    startLoadingTimer()
+    if (mode === 'pdf') {
+      htmlSrcdoc.value = ''
+      const pdf = await projectApi.previewProjectPdf(projectId, currentOptions())
+      if (renderToken !== token) return
+      // Replace any previous blob URL before installing the new one so the
+      // browser doesn't keep two PDFs around.
+      const previousUrl = pdfBlobUrl.value
+      pdfBlobUrl.value = URL.createObjectURL(pdf)
+      if (previousUrl) {
+        URL.revokeObjectURL(previousUrl)
+      }
+    } else {
+      const html = await projectApi.previewProjectHtml(projectId, currentOptions())
+      if (renderToken !== token) return
+      htmlSrcdoc.value = html
+    }
   } catch (error) {
-    console.error('生成PDF预览失败:', error)
-    ElMessage.error(error instanceof Error ? error.message : 'PDF 预览失败')
+    if (renderToken !== token) return
+    console.error('生成预览失败:', error)
+    ElMessage.error(error instanceof Error ? error.message : '预览失败')
     clearPreview()
   } finally {
-    loading.value = false
-  }
-}
-
-const ensurePdfJs = async () => {
-  const promiseWithResolvers = Promise as typeof Promise & {
-    withResolvers?: <T>() => {
-      promise: Promise<T>
-      resolve: (value: T | PromiseLike<T>) => void
-      reject: (reason?: unknown) => void
+    if (renderToken === token) {
+      loading.value = false
+      loadingPhase.value = 'idle'
+      stopLoadingTimer()
     }
-  }
-
-  // pdf.js 5 relies on this modern API; define it before dynamically loading pdf.js.
-  if (!promiseWithResolvers.withResolvers) {
-    promiseWithResolvers.withResolvers = <T>() => {
-      let resolve!: (value: T | PromiseLike<T>) => void
-      let reject!: (reason?: unknown) => void
-      const promise = new Promise<T>((promiseResolve, promiseReject) => {
-        resolve = promiseResolve
-        reject = promiseReject
-      })
-      return { promise, resolve, reject }
-    }
-  }
-
-  const pdfjs = await import('pdfjs-dist')
-  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
-  return pdfjs
-}
-
-const renderPdf = async (pdf: Blob, token: number) => {
-  renderToken = token
-  if (activePdfDocument) {
-    await activePdfDocument.destroy()
-    activePdfDocument = null
-  }
-
-  pageNumbers.value = []
-  pageCount.value = 0
-  pageCanvases.clear()
-
-  const pdfjs = await ensurePdfJs()
-  const data = new Uint8Array(await pdf.arrayBuffer())
-  const loadingTask = pdfjs.getDocument({ data })
-  const pdfDocument = await loadingTask.promise
-  if (renderToken !== token) {
-    await pdfDocument.destroy()
-    return
-  }
-
-  activePdfDocument = pdfDocument
-  pageCount.value = pdfDocument.numPages
-  pageNumbers.value = Array.from({ length: pdfDocument.numPages }, (_, index) => index + 1)
-  await nextTick()
-
-  const availableWidth = Math.max((contentArea.value?.clientWidth || 960) - 72, 480)
-  const pixelRatio = window.devicePixelRatio || 1
-
-  for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
-    if (renderToken !== token) return
-
-    const page = await pdfDocument.getPage(pageNumber)
-    const baseViewport = page.getViewport({ scale: 1 })
-    const scale = Math.min(availableWidth / baseViewport.width, 1.65)
-    const viewport = page.getViewport({ scale })
-    const canvas = pageCanvases.get(pageNumber)
-    const context = canvas?.getContext('2d')
-    if (!canvas || !context) continue
-
-    canvas.width = Math.floor(viewport.width * pixelRatio)
-    canvas.height = Math.floor(viewport.height * pixelRatio)
-    canvas.style.width = `${viewport.width}px`
-    canvas.style.height = `${viewport.height}px`
-    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
-
-    await page.render({
-      canvas,
-      canvasContext: context,
-      viewport
-    }).promise
   }
 }
 
@@ -253,14 +306,6 @@ const downloadPdfBlob = (blob: Blob, filename: string) => {
   link.click()
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
-}
-
-const setPageCanvas = (pageNumber: number, element: Element | ComponentPublicInstance | null) => {
-  if (element instanceof HTMLCanvasElement) {
-    pageCanvases.set(pageNumber, element)
-  } else {
-    pageCanvases.delete(pageNumber)
-  }
 }
 
 const handleClose = () => {
@@ -359,38 +404,19 @@ onBeforeUnmount(() => {
 }
 
 .content-area {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: auto;
   background: #e9eef5;
 }
 
-.pdf-pages {
-  min-height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 24px;
-  padding: 28px;
-}
-
-.pdf-page {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-
-.pdf-page-canvas {
-  max-width: 100%;
+.pdf-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 70vh;
+  border: 0;
   background: #fff;
-  border-radius: 2px;
-  box-shadow: 0 10px 30px rgba(16, 32, 51, 0.18);
-}
-
-.page-number {
-  color: var(--cw-text-muted);
-  font-size: 12px;
 }
 
 .preview-empty {
@@ -400,6 +426,67 @@ onBeforeUnmount(() => {
   justify-content: center;
   color: var(--cw-text-muted);
   font-size: 14px;
+}
+
+.preview-loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(248, 250, 252, 0.92);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.preview-loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 36px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 10px 32px rgba(16, 32, 51, 0.12);
+  pointer-events: auto;
+  max-width: 420px;
+  text-align: center;
+}
+
+.preview-loading-spinner {
+  font-size: 36px;
+  color: var(--cw-blue-600, #147ED6);
+}
+
+.preview-loading-spinner.is-loading {
+  animation: preview-loading-rotate 1s linear infinite;
+}
+
+.preview-loading-title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--cw-text, #102033);
+}
+
+.preview-loading-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--cw-text-muted, #667587);
+  line-height: 1.5;
+}
+
+@keyframes preview-loading-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.html-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 60vh;
+  border: 0;
+  background: #fff;
 }
 
 .dialog-footer {

@@ -76,6 +76,10 @@ pnpm run dev
 
 默认从 `http://127.0.0.1:3000/` 访问前端；如果 3000 端口已被占用，以 Vite 终端输出的实际端口为准。
 
+### 健康检查
+- `GET /health` 与 `GET /healthz` 返回 `{"status":"healthy","version":"<APP_VERSION>"}`，便于负载均衡或运维探活。
+- 版本号读取自 `backend/pyproject.toml`，可通过环境变量 `CODEWRIGHT_VERSION` 临时覆盖。
+
 ### 后端测试
 ```bash
 cd backend
@@ -113,7 +117,24 @@ pnpm run build
 
 ## 开发状态
 
-当前版本：V 0.0.1（本地开发版本）
+当前版本：V 0.1.1（本地开发版本，详见 [CHANGELOG.md](CHANGELOG.md)）
+
+## 模板编写指南
+
+管理员可在"模板管理"中上传 HTML 模板供导出使用，模板默认走前端模板引擎可识别的极简语法：
+
+- 全局变量替换：`{{project_name}} / {{generated_time}} / {{file_count}} / {{software_name}} / {{version}} / {{developer}}`。
+- 循环与索引：
+
+  ```html
+  {% for file in files %}
+    <h2>{{loop.index}}. {{file.filename}}</h2>
+    <pre>{{file.highlighted_content|safe}}</pre>
+  {% endfor %}
+  ```
+
+- 默认管理员可在后台"模板管理"中点击"复制版本"，基于现有模板生成草稿后再做增量调整。
+- 章节正文 Markdown 经 `markdown-it + DOMPurify` 渲染，前端预览与 LaTeX 导出共享同一全局变量。
 
 ## 功能特性
 

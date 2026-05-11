@@ -121,11 +121,13 @@ export interface ProjectFileListResponse {
 export interface ExportJob {
   id: number
   project_id: number
+  project_name?: string
   job_id: string
   status: 'queued' | 'processing' | 'success' | 'failed'
   progress: number
   result_file_path?: string
   error_message?: string
+  error_log_url?: string | null
   created_at: string
   updated_at: string
   download_url?: string

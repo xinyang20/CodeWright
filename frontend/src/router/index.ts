@@ -65,22 +65,26 @@ router.beforeEach(async (to) => {
   const authStore = useAuthStore()
 
   if (authStore.isAuthenticated && !authStore.user) {
-    await authStore.getCurrentUser()
+    try {
+      await authStore.getCurrentUser()
+    } catch (error) {
+      console.error('恢复登录态失败，清理 token:', error)
+      authStore.logout()
+      if (to.meta.requiresAuth) {
+        return { name: 'login', query: { redirect: to.fullPath } }
+      }
+    }
   }
-  
-  // 检查是否需要认证
+
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
-  
-  // 检查是否需要管理员权限
+
   if (to.meta.requiresAdmin && !authStore.isAdmin) {
-    // ElMessage.error('权限不足')
     console.error('权限不足')
     return { name: 'dashboard' }
   }
-  
-  // 已登录用户访问登录/注册页面，重定向到仪表板
+
   if ((to.name === 'login' || to.name === 'register') && authStore.isAuthenticated) {
     return { name: 'dashboard' }
   }

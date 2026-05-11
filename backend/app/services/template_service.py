@@ -151,7 +151,59 @@ class TemplateService:
         self.db.commit()
         
         return True
-    
+
+    async def clone_template(self, template_id: int, new_version: Optional[str] = None) -> Template:
+        """复制一个现有模板，生成 draft 状态的新版本，便于增量改动。"""
+        original = self.db.query(Template).filter(Template.id == template_id).first()
+        if not original:
+            raise ValueError("模板不存在")
+
+        target_version = (new_version or self._next_version_string(original.version)).strip()
+        if not target_version:
+            raise ValueError("新版本号不能为空")
+
+        existing = self.db.query(Template).filter(
+            Template.name == original.name,
+            Template.version == target_version,
+        ).first()
+        if existing:
+            raise ValueError("同名同版本模板已存在，请输入新的版本号")
+
+        source_path = original.storage_path
+        safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in original.name)
+        safe_version = "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in target_version)
+        new_filename = f"{safe_name}_{safe_version}_{uuid.uuid4().hex[:8]}.html"
+        new_path = self.template_dir / new_filename
+        if source_path and os.path.exists(source_path):
+            shutil.copyfile(source_path, new_path)
+        else:
+            new_path.write_text("", encoding="utf-8")
+
+        clone = Template(
+            name=original.name,
+            version=target_version,
+            description=original.description,
+            storage_path=str(new_path),
+            status="draft",
+        )
+        self.db.add(clone)
+        self.db.commit()
+        self.db.refresh(clone)
+        return clone
+
+    @staticmethod
+    def _next_version_string(version: str) -> str:
+        """Best-effort to bump the trailing numeric segment by 1."""
+        if not version:
+            return "1.0.1"
+        parts = version.split(".")
+        for index in range(len(parts) - 1, -1, -1):
+            piece = parts[index]
+            if piece.isdigit():
+                parts[index] = str(int(piece) + 1)
+                return ".".join(parts)
+        return f"{version}.1"
+
     async def get_template_by_id(self, template_id: int) -> Optional[Template]:
         """根据ID获取模板"""
         return self.db.query(Template).filter(Template.id == template_id).first()

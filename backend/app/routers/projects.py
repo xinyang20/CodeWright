@@ -10,7 +10,7 @@ from typing import Optional
 from app.database import get_db, SessionLocal
 from app.models.export_history import ExportHistory
 from app.schemas.project import ProjectCreate, ProjectUpdate, ManualSectionCreate, ManualSectionUpdate
-from app.schemas.common import ResponseModel
+from app.schemas.common import ResponseModel, ErrorCodes
 from app.services.auth_service import get_current_user
 from app.services.export_service import ExportService
 from app.services.file_service import FileService
@@ -51,6 +51,11 @@ async def get_projects(
     project_type: Optional[str] = Query(None, pattern="^(code|manual)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
+    keyword: Optional[str] = Query(None, max_length=100),
+    order: str = Query(
+        "updated_desc",
+        pattern="^(updated_desc|updated_asc|created_desc|created_asc|name_asc|name_desc)$",
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -58,15 +63,20 @@ async def get_projects(
     try:
         project_service = ProjectService(db)
         projects = await project_service.get_user_projects(
-            current_user.id, project_type, page, page_size
+            current_user.id,
+            project_type,
+            page,
+            page_size,
+            keyword=keyword,
+            order=order,
         )
         return ResponseModel(
-            code=0,
+            code=ErrorCodes.OK,
             message="获取成功",
             data=projects
         )
-    except Exception as e:
-        return ResponseModel(code=5001, message="服务器内部错误")
+    except Exception:
+        return ResponseModel(code=ErrorCodes.SERVER_ERROR, message="服务器内部错误")
 
 @router.get("/{project_id}", response_model=ResponseModel)
 async def get_project(
@@ -275,22 +285,22 @@ async def upload_file_to_project(
         project_service = ProjectService(db)
         project = await project_service.get_project_by_id(project_id, current_user.id)
         if not project:
-            return ResponseModel(code=4001, message="项目不存在")
+            return ResponseModel(code=ErrorCodes.NOT_FOUND, message="项目不存在")
 
         file_service = FileService(db)
         file_content = await file.read()
         valid, message = file_service.validate_upload(file.filename or "", len(file_content))
         if not valid:
-            return ResponseModel(code=2001, message=message)
+            return ResponseModel(code=ErrorCodes.INVALID_FILE, message=message)
 
         uploaded_file = await file_service.save_uploaded_file(file, current_user.id, file_content)
         success = await project_service.add_file_to_project(project_id, uploaded_file.id, current_user.id)
         if not success:
             await file_service.delete_file(uploaded_file.id, current_user.id)
-            return ResponseModel(code=2001, message="项目总文件大小超过限制")
+            return ResponseModel(code=ErrorCodes.INVALID_FILE, message="项目总文件大小超过限制")
 
         return ResponseModel(
-            code=0,
+            code=ErrorCodes.OK,
             message="文件上传成功",
             data={
                 "file_id": uploaded_file.id,
@@ -299,7 +309,7 @@ async def upload_file_to_project(
             }
         )
     except Exception:
-        return ResponseModel(code=5001, message="文件上传失败")
+        return ResponseModel(code=ErrorCodes.SERVER_ERROR, message="文件上传失败")
 
 @router.get("/{project_id}/preview")
 async def preview_project_html(
@@ -357,7 +367,8 @@ async def preview_project_pdf(
         pdf_bytes = await PdfService(db).export_project_to_pdf(
             project_id=project_id,
             user_id=current_user.id,
-            options=preview_options
+            options=preview_options,
+            use_cache=True,
         )
         if not pdf_bytes:
             return ResponseModel(code=4001, message="项目不存在或无文件可预览")
@@ -388,11 +399,11 @@ async def submit_project_export_job(
         export_service = ExportService(db)
         job = await export_service.submit_export_job(project_id, current_user.id, export_options)
         if not job:
-            return ResponseModel(code=4001, message="项目不存在")
+            return ResponseModel(code=ErrorCodes.NOT_FOUND, message="项目不存在")
         background_tasks.add_task(_run_export_job, job["job_id"], current_user.id, export_options)
-        return ResponseModel(code=0, message="导出任务已提交", data=job)
-    except Exception as e:
-        return ResponseModel(code=5001, message="提交导出任务失败")
+        return ResponseModel(code=ErrorCodes.OK, message="导出任务已提交", data=job)
+    except Exception:
+        return ResponseModel(code=ErrorCodes.EXPORT_FAILED, message="提交导出任务失败")
 
 @router.post("/{project_id}/export/pdf")
 async def export_project_pdf(
@@ -410,7 +421,7 @@ async def export_project_pdf(
         project_service = ProjectService(db)
         project = await project_service.get_project_by_id(project_id, current_user.id)
         if not project:
-            return ResponseModel(code=4001, message="项目不存在")
+            return ResponseModel(code=ErrorCodes.NOT_FOUND, message="项目不存在")
 
         pdf_service = PdfService(db)
         pdf_bytes = await pdf_service.export_project_to_pdf(
@@ -427,7 +438,7 @@ async def export_project_pdf(
                 duration_ms=int((datetime.now() - start_time).total_seconds() * 1000)
             ))
             db.commit()
-            return ResponseModel(code=4001, message="项目不存在或无文件可导出")
+            return ResponseModel(code=ErrorCodes.NOT_FOUND, message="项目不存在或无文件可导出")
 
         db.add(ExportHistory(
             project_id=project_id,
@@ -455,9 +466,9 @@ async def export_project_pdf(
             duration_ms=int((datetime.now() - start_time).total_seconds() * 1000)
         ))
         db.commit()
-        return ResponseModel(code=5001, message=str(e))
-    except Exception as e:
-        return ResponseModel(code=5001, message="PDF导出失败")
+        return ResponseModel(code=ErrorCodes.EXPORT_FAILED, message=str(e))
+    except Exception:
+        return ResponseModel(code=ErrorCodes.EXPORT_FAILED, message="PDF导出失败")
 
 @router.get("/{project_id}/sections", response_model=ResponseModel)
 async def get_manual_sections(

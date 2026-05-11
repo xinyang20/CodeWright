@@ -5,7 +5,7 @@ import AutoImport from "unplugin-auto-import/vite";
 import Components from "unplugin-vue-components/vite";
 
 const backendTarget =
-  process.env.VITE_API_PROXY_TARGET || "http://127.0.0.1:8000";
+  process.env.VITE_API_PROXY_TARGET || "http://127.0.0.1:8001";
 
 // https://vitejs.dev/config/
 export default defineConfig({

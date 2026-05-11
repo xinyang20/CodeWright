@@ -16,6 +16,10 @@ from datetime import datetime
 import bleach
 from markdown_it import MarkdownIt
 from PIL import Image, ImageDraw, ImageFont
+from pygments import highlight as pygments_highlight
+from pygments.formatters import LatexFormatter
+from pygments.lexers import get_lexer_by_name
+from pygments.util import ClassNotFound
 from sqlalchemy.orm import Session
 
 from app.models.manual_section import ManualSection
@@ -24,7 +28,11 @@ from app.models.file import UploadedFile
 from app.models.setting import Setting
 from app.models.template import Template
 from app.paths import TINYTEX_DIR, TINYTEX_DOWNLOAD_DIR
+from app.services import preview_cache_service
 from app.services.highlight_service import HighlightService
+
+PYGMENTS_LATEX_STYLE = "default"
+PYGMENTS_LATEX_COMMAND_PREFIX = "PYG"
 
 
 class PdfService:
@@ -39,9 +47,14 @@ class PdfService:
         self,
         project_id: int,
         user_id: int,
-        options: Dict[str, Any] = None
+        options: Dict[str, Any] = None,
+        log_path: Optional[Path] = None,
+        use_cache: bool = False,
     ) -> Optional[bytes]:
-        """导出项目为PDF"""
+        """导出项目为PDF
+
+        ``use_cache`` 为真时会按"项目内容指纹 + 选项指纹"在 ``runtime/exports/preview_cache``
+        下做命中检查，命中即直接返回缓存，未命中再走 xelatex 编译。"""
         try:
             # 获取项目信息
             project = self.db.query(Project).filter(
@@ -76,7 +89,19 @@ class PdfService:
                     return None
 
                 code_items = project_items
-            
+
+            cache_signature: Optional[str] = None
+            if use_cache:
+                cache_signature = preview_cache_service.compute_signature(
+                    project=project,
+                    items=code_items,
+                    sections=manual_sections,
+                    options=options,
+                )
+                cached_bytes = preview_cache_service.load(project_id, cache_signature)
+                if cached_bytes:
+                    return cached_bytes
+
             # PDF 导出固定走 LaTeX 链路，避免 HTML 引擎缺失时生成乱码 PDF。
             try:
                 pdf_bytes = await self._generate_latex_pdf(
@@ -84,6 +109,7 @@ class PdfService:
                     options=options,
                     project_items=code_items,
                     sections=manual_sections,
+                    log_path=log_path,
                 )
             except RuntimeError as e:
                 if not self._image_pdf_fallback_enabled():
@@ -95,7 +121,10 @@ class PdfService:
                     project_items=code_items,
                     sections=manual_sections,
                 )
-            
+
+            if use_cache and cache_signature and pdf_bytes:
+                preview_cache_service.save(project_id, cache_signature, pdf_bytes)
+
             return pdf_bytes
             
         except RuntimeError:
@@ -531,9 +560,13 @@ class PdfService:
         options: dict[str, Any],
         project_items: Optional[list[ProjectItem]] = None,
         sections: Optional[list[ManualSection]] = None,
+        log_path: Optional[Path] = None,
     ) -> bytes:
         """Generate a PDF by writing LaTeX first and compiling it with XeLaTeX."""
         style = self._get_latex_style()
+        # The TOC is the only artefact that genuinely benefits from a second
+        # xelatex pass; skip it otherwise to roughly halve compile time.
+        needs_two_passes = bool(options.get("include_toc", True))
         with tempfile.TemporaryDirectory(prefix="codewright-latex-") as temp_dir:
             work_dir = Path(temp_dir)
             tex_path = work_dir / "codewright_export.tex"
@@ -546,7 +579,12 @@ class PdfService:
                 sections=sections,
             )
             tex_path.write_text(tex_content, encoding="utf-8")
-            return self._compile_latex_to_pdf(tex_path, style)
+            return self._compile_latex_to_pdf(
+                tex_path,
+                style,
+                log_path=log_path,
+                num_runs=2 if needs_two_passes else 1,
+            )
 
     async def _build_latex_document(
         self,
@@ -561,7 +599,7 @@ class PdfService:
         generated_time = datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")
         project_type = "代码文件" if project.project_type == "code" else "操作文档"
         parts = [
-            self._build_latex_preamble(project.project_name, generated_time, style),
+            self._build_latex_preamble(project.project_name, generated_time, style, options),
             r"\begin{document}",
             r"\maketitle",
             r"\thispagestyle{fancy}",
@@ -635,7 +673,13 @@ class PdfService:
         parts.append(r"\end{document}")
         return "\n".join(parts)
 
-    def _build_latex_preamble(self, title: str, generated_time: str, style: dict[str, Any]) -> str:
+    def _build_latex_preamble(
+        self,
+        title: str,
+        generated_time: str,
+        style: dict[str, Any],
+        options: Optional[dict[str, Any]] = None,
+    ) -> str:
         document_class = str(style.get("document_class") or "article").strip() or "article"
         font_size = str(style.get("font_size") or "12pt").strip() or "12pt"
         geometry = str(style.get("page_geometry") or "a4paper,margin=2cm").strip() or "a4paper,margin=2cm"
@@ -645,6 +689,7 @@ class PdfService:
         header_latex = str(style.get("header_latex") or "").strip()
         footer_latex = str(style.get("footer_latex") or r"\thepage").strip() or r"\thepage"
         preamble_latex = str(style.get("preamble_latex") or "").strip()
+        watermark_enabled = bool((options or {}).get("watermark", False))
 
         parts = [
             f"\\documentclass[{font_size}]{{{document_class}}}",
@@ -660,6 +705,8 @@ class PdfService:
             r"\usepackage{longtable}",
             r"\usepackage{fvextra}",
             r"\usepackage{setspace}",
+            r"\usepackage{multicol}",
+            r"\usepackage{titlesec}",
             f"\\geometry{{{geometry}}}",
             f"\\setstretch{{{line_stretch}}}",
             r"\definecolor{codewrightBlue}{HTML}{147ED6}",
@@ -674,7 +721,28 @@ class PdfService:
             r"\fvset{breaklines=true,breakanywhere=true,fontsize=\small,frame=single,framesep=2mm,tabsize=2}",
         ]
 
+        if watermark_enabled:
+            watermark_text = self._compute_watermark_text(title, options)
+            escaped = self._latex_escape(watermark_text)
+            parts.extend([
+                "% Watermark on every page when options.watermark is enabled.",
+                r"\usepackage{background}",
+                r"\backgroundsetup{",
+                r"  scale=8,",
+                r"  angle=60,",
+                r"  opacity=0.07,",
+                r"  contents={" + escaped + "},",
+                r"  color=codewrightText",
+                r"}",
+            ])
+
         parts.append(self._latex_font_setup(main_font, mono_font))
+
+        parts.extend([
+            "",
+            "% Pygments syntax-highlighting commands",
+            self._pygments_latex_style_defs(),
+        ])
 
         if preamble_latex:
             parts.extend(["", "% Custom PDF style from admin settings", preamble_latex])
@@ -686,6 +754,31 @@ class PdfService:
             f"\\date{{{self._latex_escape(generated_time)}}}",
         ])
         return "\n".join(parts)
+
+    @staticmethod
+    def _compute_watermark_text(default_title: str, options: Optional[dict[str, Any]]) -> str:
+        """Pick the watermark caption.  Manual projects prefer the software name,
+        code projects fall back to the project title or a sensible generic label."""
+        if options:
+            for key in ("watermark_text", "software_name", "version"):
+                value = options.get(key) if isinstance(options, dict) else None
+                if value:
+                    cleaned = str(value).strip()
+                    if cleaned:
+                        return cleaned
+        if default_title and default_title.strip():
+            return default_title.strip()
+        return "CodeWright"
+
+    @staticmethod
+    def _pygments_latex_style_defs() -> str:
+        """Pygments LaTeX color/command definitions for syntax-highlighted blocks."""
+        formatter = LatexFormatter(
+            style=PYGMENTS_LATEX_STYLE,
+            commandprefix=PYGMENTS_LATEX_COMMAND_PREFIX,
+            nobackground=True,
+        )
+        return formatter.get_style_defs()
 
     def _latex_font_setup(self, main_font: str, mono_font: str) -> str:
         cjk_candidates = [
@@ -742,9 +835,19 @@ class PdfService:
         parts: list[str] = []
         total_lines = 0
         next_line_number = 1
+        bold_filename = bool(options.get("file_name_bold", True))
+        double_column = options.get("layout") == "double_column"
+        highlight_syntax = bool(options.get("highlight_syntax", True))
+
+        if double_column:
+            parts.append(r"\begin{multicols}{2}")
 
         for index, item in enumerate(project_items, 1):
             file_name = item.display_name or item.file.original_filename
+            section_title = self._latex_escape(file_name)
+            if bold_filename:
+                section_title = f"\\textbf{{{section_title}}}"
+
             highlight_result = await self.highlight_service.highlight_code(
                 file_id=item.file_id,
                 user_id=project.owner_id,
@@ -753,22 +856,65 @@ class PdfService:
                 highlight_syntax=False,
             )
             content = highlight_result.get("content") if highlight_result else "无法加载文件内容"
+            language = (highlight_result or {}).get("language") or "text"
             line_count = len(str(content).splitlines()) or 1
             total_lines += line_count
 
+            body, used_pygments = self._render_code_block_body(
+                str(content),
+                language=language,
+                highlight_syntax=highlight_syntax,
+            )
+
             parts.extend([
-                f"\\section{{{self._latex_escape(file_name)}}}",
+                f"\\section{{{section_title}}}",
                 self._latex_code_block(
-                    str(content),
+                    body,
                     options=options,
                     first_number=next_line_number,
+                    pygments_commands=used_pygments,
                 ),
                 "",
             ])
             if options.get("continuous_line_numbers", False) and options.get("line_numbers", True):
                 next_line_number += line_count
 
+        if double_column:
+            parts.append(r"\end{multicols}")
+
         return "\n".join(parts), total_lines
+
+    def _render_code_block_body(
+        self,
+        content: str,
+        language: str,
+        highlight_syntax: bool,
+    ) -> tuple[str, bool]:
+        """Return (body_for_verbatim, uses_pygments_commands)."""
+        normalized_language = (language or "text").strip().lower()
+        if not highlight_syntax or normalized_language in {"", "text", "txt", "plain", "plaintext"}:
+            return self._sanitize_verbatim(content), False
+        try:
+            lexer = get_lexer_by_name(normalized_language)
+        except ClassNotFound:
+            return self._sanitize_verbatim(content), False
+
+        formatter = LatexFormatter(
+            style=PYGMENTS_LATEX_STYLE,
+            commandprefix=PYGMENTS_LATEX_COMMAND_PREFIX,
+            nobackground=True,
+            mathescape=False,
+            texcomments=False,
+        )
+        rendered = pygments_highlight(content, lexer, formatter)
+        match = re.search(
+            r"\\begin\{Verbatim\}[^\n]*\n(.*?)\n?\\end\{Verbatim\}",
+            rendered,
+            re.DOTALL,
+        )
+        if not match:
+            return self._sanitize_verbatim(content), False
+        return match.group(1), True
 
     def _manual_sections_to_latex(
         self,
@@ -869,28 +1015,55 @@ class PdfService:
             parts.append(r"\end{Verbatim}")
         return "\n".join(parts)
 
-    def _latex_code_block(self, content: str, options: dict[str, Any], first_number: int = 1) -> str:
+    def _latex_code_block(
+        self,
+        content: str,
+        options: dict[str, Any],
+        first_number: int = 1,
+        pygments_commands: bool = False,
+    ) -> str:
+        font_macro = self._latex_code_font_macro(options.get("font_size"))
         block_options = [
             "breaklines=true" if options.get("wrap_lines", True) else "breaklines=false",
             "breakanywhere=true",
-            "fontsize=\\small",
+            f"fontsize=\\{font_macro}",
             "frame=single",
             "framesep=2mm",
             "tabsize=2",
         ]
+        if pygments_commands:
+            # commandchars must come first so the body's \PYG{...} commands are interpreted.
+            block_options.insert(0, r"commandchars=\\\{\}")
         if options.get("line_numbers", True):
             block_options.extend(["numbers=left", "numbersep=6pt"])
             if options.get("continuous_line_numbers", False):
                 block_options.append(f"firstnumber={first_number}")
 
+        body = content if pygments_commands else self._sanitize_verbatim(content)
         return (
             "\\begin{Verbatim}[" + ",".join(block_options) + "]\n"
-            + self._sanitize_verbatim(content)
+            + body
             + "\n\\end{Verbatim}"
         )
 
+    def _latex_code_font_macro(self, font_size: Any) -> str:
+        """Map UI font_size selections (12px/14px/16px) to LaTeX size macros."""
+        normalized = str(font_size or "").strip().lower()
+        mapping = {
+            "12px": "scriptsize",
+            "12pt": "scriptsize",
+            "14px": "small",
+            "14pt": "small",
+            "16px": "normalsize",
+            "16pt": "normalsize",
+        }
+        return mapping.get(normalized, "small")
+
     def _sanitize_verbatim(self, value: str) -> str:
         return value.replace(r"\end{Verbatim}", r"\\end{Verbatim}")
+
+    MAX_MANUAL_IMAGE_WIDTH = 1600
+    JPEG_QUALITY = 85
 
     def _copy_latex_image(
         self,
@@ -908,27 +1081,91 @@ class PdfService:
         suffix = source.suffix.lower() or ".png"
         target = asset_dir / f"manual_image_{index}{suffix}"
         try:
-            shutil.copyfile(source, target)
+            from PIL import Image  # local import: keep PdfService import-time light
+            with Image.open(source) as image:
+                width, _ = image.size
+                if width <= self.MAX_MANUAL_IMAGE_WIDTH:
+                    shutil.copyfile(source, target)
+                    return target
+
+                ratio = self.MAX_MANUAL_IMAGE_WIDTH / float(width)
+                new_size = (
+                    self.MAX_MANUAL_IMAGE_WIDTH,
+                    max(1, int(image.height * ratio)),
+                )
+                resized = image.resize(new_size, Image.LANCZOS)
+
+                save_kwargs: dict[str, Any] = {}
+                fmt = (image.format or "").upper() or None
+                if suffix in {".jpg", ".jpeg"}:
+                    save_kwargs.update(quality=self.JPEG_QUALITY, optimize=True)
+                    if resized.mode != "RGB":
+                        resized = resized.convert("RGB")
+                    fmt = "JPEG"
+                elif suffix == ".png":
+                    save_kwargs.update(optimize=True)
+                    fmt = "PNG"
+                else:
+                    fmt = fmt or "PNG"
+
+                resized.save(target, format=fmt, **save_kwargs)
             return target
         except Exception:
-            return None
+            try:
+                shutil.copyfile(source, target)
+                return target
+            except Exception:
+                return None
 
-    def _compile_latex_to_pdf(self, tex_path: Path, style: dict[str, Any]) -> bytes:
+    def _compile_latex_to_pdf(
+        self,
+        tex_path: Path,
+        style: dict[str, Any],
+        log_path: Optional[Path] = None,
+        num_runs: int = 2,
+    ) -> bytes:
         engine = str(style.get("latex_engine") or "xelatex").strip() or "xelatex"
         if engine != "xelatex":
             raise RuntimeError("当前仅支持 xelatex 作为 LaTeX PDF 引擎")
 
+        # At least one xelatex pass is always required.
+        num_runs = max(1, int(num_runs))
+
         if os.getenv("CODEWRIGHT_USE_SYSTEM_XELATEX", "0") == "1":
             engine_path = shutil.which(engine)
             if engine_path:
-                return self._compile_latex_with_subprocess(tex_path, engine_path)
+                return self._compile_latex_with_subprocess(
+                    tex_path, engine_path, log_path=log_path, num_runs=num_runs,
+                )
 
         if self._image_pdf_fallback_enabled():
             raise RuntimeError("测试环境跳过 PyTinyTeX 自动下载")
 
-        return self._compile_latex_with_pytinytex(tex_path, engine)
+        return self._compile_latex_with_pytinytex(
+            tex_path, engine, log_path=log_path, num_runs=num_runs,
+        )
 
-    def _compile_latex_with_subprocess(self, tex_path: Path, engine_path: str) -> bytes:
+    def _persist_failure_log(self, tex_path: Path, log_path: Optional[Path]) -> None:
+        """Copy the LaTeX .log file to a stable destination so the UI can display it."""
+        if not log_path:
+            return
+        source = tex_path.with_suffix(".log")
+        if not source.exists():
+            return
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, log_path)
+        except Exception:
+            # Logging persistence is best-effort; never break the original error.
+            pass
+
+    def _compile_latex_with_subprocess(
+        self,
+        tex_path: Path,
+        engine_path: str,
+        log_path: Optional[Path] = None,
+        num_runs: int = 2,
+    ) -> bytes:
         command = [
             engine_path,
             "-interaction=nonstopmode",
@@ -938,7 +1175,7 @@ class PdfService:
             tex_path.name,
         ]
         last_result: subprocess.CompletedProcess[str] | None = None
-        for _ in range(2):
+        for _ in range(max(1, num_runs)):
             last_result = subprocess.run(
                 command,
                 cwd=tex_path.parent,
@@ -952,17 +1189,24 @@ class PdfService:
 
         pdf_path = tex_path.with_suffix(".pdf")
         if last_result is None or last_result.returncode != 0 or not pdf_path.exists():
-            log_path = tex_path.with_suffix(".log")
+            local_log_path = tex_path.with_suffix(".log")
             log_text = ""
-            if log_path.exists():
-                log_text = log_path.read_text(encoding="utf-8", errors="replace")
+            if local_log_path.exists():
+                log_text = local_log_path.read_text(encoding="utf-8", errors="replace")
+            self._persist_failure_log(tex_path, log_path)
             output = "\n".join(filter(None, [last_result.stdout if last_result else "", last_result.stderr if last_result else "", log_text]))
             error_tail = "\n".join(output.splitlines()[-20:]).strip()
             raise RuntimeError(f"LaTeX PDF 生成失败{': ' + error_tail if error_tail else ''}")
 
         return pdf_path.read_bytes()
 
-    def _compile_latex_with_pytinytex(self, tex_path: Path, engine: str) -> bytes:
+    def _compile_latex_with_pytinytex(
+        self,
+        tex_path: Path,
+        engine: str,
+        log_path: Optional[Path] = None,
+        num_runs: int = 2,
+    ) -> bytes:
         """Use PyTinyTeX-managed TinyTeX when no system xelatex exists."""
         try:
             import pytinytex
@@ -976,7 +1220,7 @@ class PdfService:
             str(tex_path),
             engine=engine,
             output_dir=str(tex_path.parent),
-            num_runs=2,
+            num_runs=max(1, int(num_runs)),
             auto_install=True,
             extra_args=["-halt-on-error", "-file-line-error", "-no-shell-escape"],
         )
@@ -984,6 +1228,7 @@ class PdfService:
         if result.success and pdf_path.exists():
             return pdf_path.read_bytes()
 
+        self._persist_failure_log(tex_path, log_path)
         error_messages = []
         for error in getattr(result, "errors", []) or []:
             line = f"line {error.line}: " if getattr(error, "line", None) else ""
@@ -1020,7 +1265,7 @@ class PdfService:
         if os.getenv("CODEWRIGHT_TINYTEX_AUTO_INSTALL_PACKAGES", "1") == "0":
             return
 
-        marker = TINYTEX_DIR / ".codewright_latex_packages_ready"
+        marker = TINYTEX_DIR / ".codewright_latex_packages_ready_v3"
         if marker.exists():
             return
 
@@ -1038,6 +1283,10 @@ class PdfService:
             "booktabs",
             "longtable",
             "setspace",
+            "multicol",
+            "titlesec",
+            "background",
+            "everypage",
         ]
         failures: list[str] = []
         for package in required_packages:
@@ -1199,13 +1448,50 @@ class PdfService:
                     "continuous_line_numbers": "continuous_line_numbers" in formatting,
                     "file_name_bold": "file_name_bold" in formatting,
                 })
-            options.update({
+            allowed_keys = self._allowed_request_keys(project.project_type)
+            sanitized_request = {
                 key: value
                 for key, value in requested_options.items()
-                if value is not None and key != "export_options"
-            })
+                if value is not None
+                and key not in {"export_options", "formatting"}
+                and key in allowed_keys
+            }
+            # Avoid letting a stringified template key clobber the resolved template_id.
+            if "template_id" in options and options["template_id"] is not None and "template" in sanitized_request:
+                template_value = sanitized_request["template"]
+                if isinstance(template_value, str) and not template_value.isdigit():
+                    sanitized_request.pop("template", None)
+            options.update(sanitized_request)
 
         return self._normalize_options(options)
+
+    def _allowed_request_keys(self, project_type: str) -> set[str]:
+        """Return the per-project-type whitelist of request-time option keys."""
+        common_keys = {
+            "include_toc",
+            "include_summary",
+            "watermark",
+            "template_id",
+        }
+        if project_type == "code":
+            return common_keys | {
+                "layout",
+                "font_size",
+                "line_numbers",
+                "highlight_syntax",
+                "wrap_lines",
+                "continuous_line_numbers",
+                "file_name_bold",
+            }
+        if project_type == "manual":
+            return common_keys | {
+                "template",
+                "software_name",
+                "version",
+                "developer",
+                "enable_global_variables",
+            }
+        return common_keys
 
     def _get_font_path(self) -> Optional[str]:
         candidates = [

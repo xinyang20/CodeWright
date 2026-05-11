@@ -55,7 +55,7 @@
 import { ref, computed } from 'vue'
 import { ElMessage, type UploadInstance, type UploadFile, type UploadFiles } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
-import { fileApi } from '@/utils/api'
+import { fileApi, projectApi } from '@/utils/api'
 
 // Props
 interface Props {
@@ -128,7 +128,6 @@ const clearFiles = () => {
   uploadRef.value?.clearFiles()
 }
 
-// 上传文件
 const handleUpload = async () => {
   if (fileList.value.length === 0) return
 
@@ -136,48 +135,53 @@ const handleUpload = async () => {
     uploading.value = true
     uploadProgress.value = 0
     uploadStatus.value = ''
-    
-    const uploadedFiles = []
+
+    const uploadedFiles: any[] = []
+    const failedFiles: { name: string; reason: string }[] = []
     const totalFiles = fileList.value.length
-    
+
     for (let i = 0; i < fileList.value.length; i++) {
       const fileItem = fileList.value[i]
       const file = fileItem.raw
-      
+
       if (!file) continue
 
       progressText.value = `正在上传 ${fileItem.name} (${i + 1}/${totalFiles})`
-      
+
       try {
-        // 上传文件
-        const response = await fileApi.uploadFile(file)
-        
+        const response = props.autoAddToProject && props.projectId
+          ? await projectApi.uploadFileToProject(props.projectId, file)
+          : await fileApi.uploadFile(file)
+
         if (response.code === 0) {
           uploadedFiles.push(response.data)
-          
-          // 如果需要自动添加到项目
-          if (props.autoAddToProject && props.projectId) {
-            await fileApi.addFileToProject(props.projectId, response.data.file_id)
-          }
         } else {
           throw new Error(response.message || '上传失败')
         }
       } catch (error) {
+        const reason = error instanceof Error ? error.message : '上传失败'
         console.error(`上传文件 ${fileItem.name} 失败:`, error)
-        ElMessage.error(`上传文件 ${fileItem.name} 失败`)
+        failedFiles.push({ name: fileItem.name, reason })
       }
-      
-      // 更新进度
+
       uploadProgress.value = Math.round(((i + 1) / totalFiles) * 100)
     }
-    
+
     if (uploadedFiles.length > 0) {
-      uploadStatus.value = 'success'
-      progressText.value = `成功上传 ${uploadedFiles.length} 个文件`
-      ElMessage.success(`成功上传 ${uploadedFiles.length} 个文件`)
+      const summary = failedFiles.length === 0
+        ? `成功上传 ${uploadedFiles.length} 个文件`
+        : `成功 ${uploadedFiles.length}，失败 ${failedFiles.length}`
+      uploadStatus.value = failedFiles.length === 0 ? 'success' : 'exception'
+      progressText.value = summary
+      ElMessage.success(summary)
       emit('success', uploadedFiles)
-      
-      // 清空文件列表
+
+      if (failedFiles.length > 0) {
+        ElMessage.warning(
+          failedFiles.map(item => `${item.name}: ${item.reason}`).join('\n'),
+        )
+      }
+
       setTimeout(() => {
         clearFiles()
         uploading.value = false
@@ -185,10 +189,11 @@ const handleUpload = async () => {
       }, 1500)
     } else {
       uploadStatus.value = 'exception'
-      progressText.value = '上传失败'
+      progressText.value = '所有文件上传失败'
+      ElMessage.error('所有文件上传失败')
       emit('error', '所有文件上传失败')
     }
-    
+
   } catch (error) {
     console.error('上传过程出错:', error)
     uploadStatus.value = 'exception'
